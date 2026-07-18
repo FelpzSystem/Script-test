@@ -242,6 +242,8 @@ end
 
 local function ClickButton(buttonPart)
     if not buttonPart then return false end
+    
+    -- ✅ PRIMEIRA OPÇÃO: Procurar por ClickDetector (original - compatibilidade)
     local clickDetector = buttonPart:FindFirstChildOfClass("ClickDetector")
     if clickDetector then
         LookAtPosition(buttonPart.Position)
@@ -253,8 +255,27 @@ local function ClickButton(buttonPart)
                 clickDetector:Activate()
             end
         end)
-        return success
+        if success then return true end
     end
+    
+    -- ✅ SEGUNDA OPÇÃO: Procurar por ProximityPrompt direto (novo - COMPUTADOR FUNCIONA AQUI)
+    local proximityPrompt = buttonPart:FindFirstChildOfClass("ProximityPrompt")
+    if proximityPrompt and proximityPrompt.Enabled then
+        LookAtPosition(buttonPart.Position)
+        return FirePromptDirect(proximityPrompt)
+    end
+    
+    -- ✅ TERCEIRA OPÇÃO: Procurar recursivamente por ProximityPrompt em descendentes
+    for _, child in ipairs(buttonPart:GetDescendants()) do
+        if child:IsA("ProximityPrompt") and child.Enabled then
+            local part = FindBasePartInObject(child.Parent)
+            if part then
+                LookAtPosition(part.Position)
+                return FirePromptDirect(child)
+            end
+        end
+    end
+    
     return false
 end
 
