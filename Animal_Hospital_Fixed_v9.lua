@@ -194,52 +194,104 @@ local function PegarCheckIn()
     return misc and misc:FindFirstChild("CheckIn")
 end
 
+-- Espera um ProximityPrompt ficar Enabled (ex.: liberado pelo servidor após
+-- a etapa anterior) e o dispara. Retorna true se conseguiu interagir.
+-- timeout em segundos; passos de 0.2s.
+local function EsperarEInteragir(prompt, timeout, semTeleport)
+    if not prompt then return false end
+    timeout = timeout or 8
+    local esperado = 0
+    while not prompt.Enabled and esperado < timeout do
+        if not Config.Secretaria then return false end
+        task.wait(0.2)
+        esperado = esperado + 0.2
+    end
+    if not prompt.Enabled then return false end
+    return Interagir(prompt, semTeleport)
+end
+
+-- Espera o prompt ficar Disabled de novo (sinal de que o servidor processou
+-- a interação) antes de seguir pra próxima etapa. Evita disparar o mesmo
+-- prompt várias vezes seguidas enquanto o servidor ainda está processando.
+local function EsperarProcessar(prompt, timeout)
+    if not prompt then return end
+    timeout = timeout or 5
+    local esperado = 0
+    while prompt.Enabled and esperado < timeout do
+        task.wait(0.2)
+        esperado = esperado + 0.2
+    end
+end
+
+local function SecretariaSequencia()
+    local checkIn = PegarCheckIn()
+    if not checkIn then return end
+
+    -- 1) Foto (Câmera)
+    local camPrompt = Caminho(checkIn, "Camera", "PP")
+    if camPrompt and camPrompt.Enabled then
+        if EsperarEInteragir(camPrompt, 3) then
+            EsperarProcessar(camPrompt)
+            task.wait(0.3)
+        end
+    end
+    if not Config.Secretaria then return end
+
+    -- 2) Carimbar o formulário (PatientBadgeBase)
+    local badgePrompt = Caminho(checkIn, "PatientBadgeBase", "PP")
+    if badgePrompt then
+        if EsperarEInteragir(badgePrompt, 8) then
+            EsperarProcessar(badgePrompt)
+            task.wait(0.3)
+        end
+    end
+    if not Config.Secretaria then return end
+
+    -- 3) Pegar o Emblema/Crachá de Visitante (VisitorBadgeBase)
+    local visitorPrompt = Caminho(checkIn, "VisitorBadgeBase", "PP")
+    if visitorPrompt then
+        if EsperarEInteragir(visitorPrompt, 8) then
+            EsperarProcessar(visitorPrompt)
+            task.wait(0.3)
+        end
+    end
+    if not Config.Secretaria then return end
+
+    -- 4) Computador (abrir/usar)
+    local computer = checkIn:FindFirstChild("Computer")
+    local computerPrompt = computer and computer:FindFirstChild("PP")
+    if computerPrompt then
+        if EsperarEInteragir(computerPrompt, 8) then
+            task.wait(0.3)
+        end
+    end
+    if not Config.Secretaria then return end
+
+    -- 5) Teclado do computador (clicker)
+    if computer then
+        local teclado = Caminho(computer, "Keyboard", "Keyboard")
+        local clicker = teclado and teclado:FindFirstChild("Clicker")
+        if clicker then
+            Clicar(clicker)
+            task.wait(0.4)
+        end
+    end
+    if not Config.Secretaria then return end
+
+    -- 6) Impressora
+    local printerPrompt = Caminho(checkIn, "Printer", "PP")
+    if printerPrompt then
+        EsperarEInteragir(printerPrompt, 8)
+        task.wait(0.4)
+    end
+end
+
 task.spawn(function()
-    while task.wait(1) do
+    while true do
+        RunService.Heartbeat:Wait()
         if Config.Secretaria then
-            local checkIn = PegarCheckIn()
-            if checkIn then
-
-                local camPrompt = Caminho(checkIn, "Camera", "PP")
-                if camPrompt and camPrompt.Enabled then
-                    Interagir(camPrompt)
-                    task.wait(0.4)
-                end
-
-                local badgePrompt = Caminho(checkIn, "PatientBadgeBase", "PP")
-                if badgePrompt and badgePrompt.Enabled then
-                    Interagir(badgePrompt)
-                    task.wait(0.4)
-                end
-
-                local visitorPrompt = Caminho(checkIn, "VisitorBadgeBase", "PP")
-                if visitorPrompt and visitorPrompt.Enabled then
-                    Interagir(visitorPrompt)
-                    task.wait(0.4)
-                end
-
-                local computer = checkIn:FindFirstChild("Computer")
-                local computerPrompt = computer and computer:FindFirstChild("PP")
-                if computerPrompt and computerPrompt.Enabled then
-                    Interagir(computerPrompt)
-                    task.wait(0.3)
-                end
-
-                if computer then
-                    local teclado = Caminho(computer, "Keyboard", "Keyboard")
-                    local clicker = teclado and teclado:FindFirstChild("Clicker")
-                    if clicker then
-                        Clicar(clicker)
-                        task.wait(0.4)
-                    end
-                end
-
-                local printerPrompt = Caminho(checkIn, "Printer", "PP")
-                if printerPrompt and printerPrompt.Enabled then
-                    Interagir(printerPrompt)
-                    task.wait(0.4)
-                end
-            end
+            SecretariaSequencia()
+            task.wait(1)
         end
     end
 end)
