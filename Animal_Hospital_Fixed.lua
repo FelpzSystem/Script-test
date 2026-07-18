@@ -1,6 +1,6 @@
 -- =====================================================================
 -- SILVERFOX SCRIPTS | HOSPITAL DE ANIMAIS
--- VERSÃO CORRIGIDA v6.1
+-- VERSÃO CORRIGIDA v6.2
 -- =====================================================================
 
 local WindUI = loadstring(game:HttpGet(
@@ -17,7 +17,7 @@ local Window = WindUI:CreateWindow({
 })
 
 Window:Tag({
-    Title = "v6.1 CORRIGIDO",
+    Title = "v6.2 CORRIGIDO",
     Icon = "sparkles",
     Color = Color3.fromHex("#1c1c1c"),
     Border = true,
@@ -282,10 +282,12 @@ task.spawn(function()
                 local computer = checkIn:FindFirstChild("Computer")
                 if computer then
                     local keyboard = computer:FindFirstChild("Keyboard")
-                    if keyboard then
-                        local clicker = keyboard:FindFirstChild("ClickDetector")
+                    local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
+                    if realKeyboard then
+                        local clicker = realKeyboard:FindFirstChild("Clicker")
                         if clicker and typeof(fireclickdetector) == "function" then
-                            Teleportar(keyboard.Position + Vector3.new(0, 1, 2))
+                            Teleportar(realKeyboard.Position + Vector3.new(0, 1, 2))
+                            task.wait(0.15)
                             pcall(function() fireclickdetector(clicker) end)
                         end
                     end
@@ -296,19 +298,239 @@ task.spawn(function()
 end)
 
 task.spawn(function()
+    while wait(0.8) do
+        if Config.NameESP then
+            local npcs = Workspace:FindFirstChild("NPCs")
+            if npcs then
+                for _, npc in ipairs(npcs:GetChildren()) do
+                    local humanoid = npc:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        local tag = npc:FindFirstChild("ESPName")
+                        if not tag then
+                            tag = Instance.new("BillboardGui")
+                            tag.Name = "ESPName"
+                            tag.MaxDistance = math.huge
+                            tag.Size = UDim2.new(2, 0, 2, 0)
+                            tag.Parent = npc:FindFirstChild("Head") or npc
+                            
+                            local label = Instance.new("TextLabel")
+                            label.Size = UDim2.new(1, 0, 1, 0)
+                            label.BackgroundTransparency = 1
+                            label.TextSize = 13
+                            label.Parent = tag
+                            
+                            local nameStr = string.lower(npc.Name or "")
+                            if string.find(nameStr, "anomaly") or string.find(nameStr, "shadow") or 
+                               string.find(nameStr, "ghost") then
+                                label.TextColor3 = Color3.fromRGB(255, 0, 0)
+                            else
+                                label.TextColor3 = Color3.fromRGB(0, 255, 0)
+                            end
+                            label.Text = npc.Name
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(1) do
+        if Config.AutoCloseBlinds then
+            local rooms = Workspace:FindFirstChild("Rooms")
+            if rooms then
+                for _, room in ipairs(rooms:GetDescendants()) do
+                    if room:IsA("ProximityPrompt") and room.Enabled then
+                        if string.find(string.lower(room.ActionText or ""), "close") or 
+                           string.find(string.lower(room.ActionText or ""), "blind") then
+                            Interagir(room)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(1) do
+        if Config.NoClip then
+            local char = GetChar()
+            if char then
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(0.1) do
+        if Config.WalkSpeed and Config.WalkSpeed ~= 16 then
+            local hum = GetHum()
+            if hum then
+                hum.WalkSpeed = Config.WalkSpeed
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(0.1) do
+        if Config.HighJump then
+            local hum = GetHum()
+            if hum then
+                hum.JumpPower = 200
+            end
+        else
+            local hum = GetHum()
+            if hum then
+                hum.JumpPower = 50
+            end
+        end
+    end
+end)
+
+task.spawn(function()
     while wait(2) do
+        if Config.AntiAFK then
+            local hum = GetHum()
+            if hum then
+                local args = {
+                    [1] = true
+                }
+                game:GetService("Players"):FindFirstChild("LocalPlayer"):FindFirstChildOfClass("Humanoid"):TakeDamage(0)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(0.5) do
+        if Config.SanityLock then
+            local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+            if leaderstats and leaderstats:FindFirstChild("Sanidade") then
+                leaderstats.Sanidade.Value = 100
+            end
+        end
+    end
+end)
+
+local FlyingEnabled = false
+local FlyingConnection = nil
+
+local function ToggleFly(enabled)
+    Config.Fly = enabled
+    
+    if FlyingConnection then
+        FlyingConnection:Disconnect()
+        FlyingConnection = nil
+    end
+    
+    if not enabled then return end
+    
+    FlyingEnabled = true
+    local root = GetRoot()
+    if not root then FlyingEnabled = false return end
+    
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyVelocity.Parent = root
+    
+    local flying = true
+    FlyingConnection = RunService.Heartbeat:Connect(function()
+        if not Config.Fly or not root or not root.Parent then
+            if bodyVelocity and bodyVelocity.Parent then
+                bodyVelocity:Destroy()
+            end
+            flying = false
+            FlyingEnabled = false
+            if FlyingConnection then
+                FlyingConnection:Disconnect()
+                FlyingConnection = nil
+            end
+            return
+        end
+        
+        local input = Vector3.new(0, 0, 0)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then input = input + Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then input = input - Camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then input = input - Camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then input = input + Camera.CFrame.RightVector end
+        
+        local up = Vector3.new(0, 1, 0)
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then input = input + up end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then input = input - up end
+        
+        if input.Magnitude > 0 then
+            input = input.Unit
+        end
+        
+        bodyVelocity.Velocity = input * (Config.FlySpeed or 50)
+    end)
+end
+
+task.spawn(function()
+    while wait(0.5) do
+        if Config.AutoBuyUpgrades then
+            local misc = Workspace:FindFirstChild("Misc")
+            if misc then
+                for _, item in ipairs(misc:GetDescendants()) do
+                    if item:IsA("ProximityPrompt") and item.Enabled then
+                        if string.find(string.lower(item.ActionText or ""), "buy") or 
+                           string.find(string.lower(item.ActionText or ""), "upgrade") then
+                            Interagir(item)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(1) do
         if Config.AutoRejectAnomaly then
-            for _, target in ipairs(anomalyTargets) do
-                if target and target.Parent then
-                    local npcs = Workspace:FindFirstChild("NPCs")
-                    if npcs then
-                        for _, npc in ipairs(npcs:GetChildren()) do
-                            if npc:FindFirstChildOfClass("Humanoid") then
-                                for _, child in ipairs(npc:GetChildren()) do
+            if #anomalyTargets > 0 then
+                for _, anomaly in ipairs(anomalyTargets) do
+                    if anomaly and anomaly.Parent then
+                        local found = false
+                        for _, child in ipairs(anomaly:GetChildren()) do
+                            if child:IsA("ProximityPrompt") and child.Enabled then
+                                if string.find(string.lower(child.ActionText or ""), "reject") then
+                                    Interagir(child)
+                                    found = true
+                                    break
+                                end
+                            end
+                        end
+                        if found then break end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(1) do
+        if Config.Room1 or Config.Room2 or Config.Room3 or Config.Room4 or Config.Room5 then
+            for i = 1, 5 do
+                if Config["Room" .. i] then
+                    local rooms = Workspace:FindFirstChild("Rooms")
+                    if rooms then
+                        local medical = rooms:FindFirstChild("Medical")
+                        if medical then
+                            local room = medical:FindFirstChild("Room" .. i)
+                            if room then
+                                for _, child in ipairs(room:GetDescendants()) do
                                     if child:IsA("ProximityPrompt") and child.Enabled then
-                                        if string.find(string.lower(child.ActionText or ""), "reject") then
-                                            Interagir(child)
-                                        end
+                                        Interagir(child)
                                     end
                                 end
                             end
@@ -321,291 +543,17 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while wait(2) do
-        if Config.AutoBuyUpgrades then
-            local misc = Workspace:FindFirstChild("Misc")
-            if misc then
-                local shop = misc:FindFirstChild("ShopItems")
-                if shop then
-                    for _, item in ipairs(shop:GetChildren()) do
-                        local p = item:FindFirstChildOfClass("ProximityPrompt")
-                        if p and p.Enabled then
-                            Interagir(p)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
-task.spawn(function()
     while wait(1) do
-        if Config.AutoCloseBlinds then
-            for _, obj in ipairs(Workspace:GetDescendants()) do
-                if string.find(string.lower(obj.Name or ""), "blind") or string.find(string.lower(obj.Name or ""), "shutter") then
-                    local p = obj:FindFirstChildOfClass("ProximityPrompt")
-                    if p and p.Enabled then
-                        Interagir(p)
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- ==========================================
--- ESP
--- ==========================================
-
-task.spawn(function()
-    while wait(0.5) do
-        if Config.NameESP or Config.TracerESP then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local root = player.Character:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local name = string.lower(player.Name or "")
-                        local isAnomaly = string.find(name, "anomaly") or string.find(name, "shadow") or
-                                          string.find(name, "ghost") or string.find(name, "hollow")
-
-                        if Config.NameESP then
-                            local billboard = root:FindFirstChild("ESP_Billboard")
-                            if not billboard then
-                                billboard = Instance.new("BillboardGui")
-                                billboard.Name = "ESP_Billboard"
-                                billboard.Size = UDim2.fromOffset(80, 25)
-                                billboard.StudsOffset = Vector3.new(0, 3, 0)
-                                billboard.Adornee = root
-                                billboard.AlwaysOnTop = true
-                                billboard.Parent = root
-
-                                local label = Instance.new("TextLabel")
-                                label.Size = UDim2.fromScale(1, 1)
-                                label.BackgroundTransparency = 1
-                                label.Text = player.Name
-                                label.TextColor3 = isAnomaly and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(100, 255, 100)
-                                label.TextScaled = true
-                                label.Font = Enum.Font.GothamBold
-                                label.Parent = billboard
-                            end
-                        end
-                    end
-                end
-            end
-        else
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player.Character then
-                    local root = player.Character:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local esp = root:FindFirstChild("ESP_Billboard")
-                        if esp then esp:Destroy() end
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- ==========================================
--- UTILIDADES
--- ==========================================
-
-local Flying = false
-
-task.spawn(function()
-    while true do
-        if Config.NoClip then
-            local char = GetChar()
-            if char then
-                for _, p in ipairs(char:GetDescendants()) do
-                    if p:IsA("BasePart") then p.CanCollide = false end
-                end
-            end
-        end
-        wait(0.1)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        local hum = GetHum()
-        if hum then hum.WalkSpeed = Config.WalkSpeed end
-        wait(0.1)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Config.HighJump then
-            local hum = GetHum()
-            if hum then hum.JumpPower = 100 end
-        else
-            local hum = GetHum()
-            if hum and hum.JumpPower > 50 then hum.JumpPower = 50 end
-        end
-        wait(0.1)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Config.SanityLock then
-            local misc = Workspace:FindFirstChild("Misc")
-            if misc then
-                local s = misc:FindFirstChild("sanity")
-                if s and (s:IsA("IntValue") or s:IsA("NumberValue")) then
-                    pcall(function() s.Value = 100 end)
-                end
-            end
-        end
-        wait(0.1)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Config.AntiAFK then
-            local vu = game:GetService("VirtualUser")
-            vu:CaptureController()
-            vu:ClickButton2(Vector2.new())
-        end
-        wait(30)
-    end
-end)
-
-local function ToggleFly(state)
-    Config.Fly = state
-    Flying = state
-    local root = GetRoot()
-    if not root then return end
-
-    if state then
-        local bv = Instance.new("BodyVelocity")
-        bv.MaxForce = Vector3.new(100000, 100000, 100000)
-        bv.P = 10000
-        bv.Parent = root
-
-        while Flying and Config.Fly do
-            local dir = Vector3.new(0, 0, 0)
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + Camera.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - Camera.CFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - Camera.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + Camera.CFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
-            if dir.Magnitude > 0 then dir = dir.Unit end
-            bv.Velocity = dir * Config.FlySpeed
-            RunService.RenderStepped:Wait()
-        end
-
-        if bv and bv.Parent then bv:Destroy() end
-    else
-        local bv = root:FindFirstChildOfClass("BodyVelocity")
-        if bv then bv:Destroy() end
-    end
-end
-
--- ==========================================
--- LOOPS DE ATENDIMENTO
--- ==========================================
-
-task.spawn(function()
-    while wait(1) do
-        if Config.Secretaria then
-            EsperarRoom8()
-            local misc = Workspace:FindFirstChild("Misc")
-            local checkIn = misc and misc:FindFirstChild("CheckIn")
-            if checkIn then
-                local camera = checkIn:FindFirstChild("Camera")
-                if camera then
-                    local p = BuscarPrompt("take", camera) or BuscarPrompt("photo", camera)
-                    if p then Interagir(p) end
-                end
-
-                local vb = checkIn:FindFirstChild("VisitorBadgeBase")
-                if vb then
-                    local p = BuscarPrompt("take", vb)
-                    if p then Interagir(p) end
-                end
-
-                local computer = checkIn:FindFirstChild("Computer")
-                if computer then
-                    local keyboard = computer:FindFirstChild("Keyboard")
-                    if keyboard then
-                        local clicker = keyboard:FindFirstChild("ClickDetector")
-                        if clicker and typeof(fireclickdetector) == "function" then
-                            Teleportar(keyboard.Position + Vector3.new(0, 1, 2))
-                            pcall(function() fireclickdetector(clicker) end)
-                        end
-                    end
-                end
-
-                local printer = checkIn:FindFirstChild("Printer")
-                if printer then
-                    local p = BuscarPrompt("print", printer)
-                    if p then Interagir(p) end
-                end
-            end
-        end
-    end
-end)
-
-for i = 1, 5 do
-    task.spawn(function(n)
-        while wait(0.5) do
-            if Config["Room" .. n] then
-                EsperarRoom8()
-                local rooms = Workspace:FindFirstChild("Rooms")
-                local medical = rooms and rooms:FindFirstChild("Medical")
-                local room = medical and medical:FindFirstChild("Room" .. n)
-                if room then
-                    local inBed = room:FindFirstChild("InBed")
-                    if not inBed then
-                        local mg = room:FindFirstChild("Minigame")
-                        if mg then
-                            local bed = mg:FindFirstChild("Bed")
-                            if bed then inBed = bed:FindFirstChild("InBed") end
-                        end
-                    end
-
-                    if inBed and inBed.Parent then
-                        Teleportar(inBed.Position + Vector3.new(0, 2, 0))
-                        wait(0.1)
-                        for _, c in ipairs(inBed:GetChildren()) do
-                            if c:IsA("ProximityPrompt") and c.Enabled then
-                                Interagir(c)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end, i)
-end
-
-task.spawn(function()
-    while wait(0.5) do
         if Config.Room6 then
-            EsperarRoom8()
             local rooms = Workspace:FindFirstChild("Rooms")
-            local emergency = rooms and rooms:FindFirstChild("Emergency")
-            local room6 = emergency and emergency:FindFirstChild("Room6")
-            local mg = room6 and room6:FindFirstChild("Minigame")
-            if mg then
-                local xray = mg:FindFirstChild("xrayMonitor")
-                if xray then
-                    local p = BuscarPrompt("xray", xray)
-                    if p then Interagir(p) end
-                end
-
-                local colors = mg:FindFirstChild("Colors")
-                if colors then
-                    for _, modelo in ipairs(colors:GetChildren()) do
-                        if modelo:IsA("Model") then
-                            local btn = modelo:FindFirstChild("Button")
-                            if btn and btn:IsA("BasePart") then
-                                Clicar(btn)
+            if rooms then
+                local emergency = rooms:FindFirstChild("Emergency")
+                if emergency then
+                    local room6 = emergency:FindFirstChild("Room6")
+                    if room6 then
+                        for _, child in ipairs(room6:GetDescendants()) do
+                            if child:IsA("ProximityPrompt") and child.Enabled then
+                                Interagir(child)
                             end
                         end
                     end
@@ -616,23 +564,17 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while wait(0.5) do
+    while wait(1) do
         if Config.Room7 then
-            EsperarRoom8()
             local rooms = Workspace:FindFirstChild("Rooms")
-            local emergency = rooms and rooms:FindFirstChild("Emergency")
-            local room7 = emergency and emergency:FindFirstChild("Room7")
-            local mg = room7 and room7:FindFirstChild("Minigame")
-            if mg then
-                local bed = mg:FindFirstChild("Bed")
-                if bed then
-                    local inBed = bed:FindFirstChild("InBed")
-                    if inBed then
-                        Teleportar(inBed.Position + Vector3.new(0, 1, 1))
-                        wait(0.1)
-                        for _, c in ipairs(inBed:GetChildren()) do
-                            if c:IsA("ProximityPrompt") and c.Enabled then
-                                Interagir(c)
+            if rooms then
+                local emergency = rooms:FindFirstChild("Emergency")
+                if emergency then
+                    local room7 = emergency:FindFirstChild("Room7")
+                    if room7 then
+                        for _, child in ipairs(room7:GetDescendants()) do
+                            if child:IsA("ProximityPrompt") and child.Enabled then
+                                Interagir(child)
                             end
                         end
                     end
@@ -643,7 +585,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while wait(0.3) do
+    while wait(1) do
         if Config.Room8 then
             local rooms = Workspace:FindFirstChild("Rooms")
             local emergency = rooms and rooms:FindFirstChild("Emergency")
@@ -667,6 +609,40 @@ task.spawn(function()
                             end
                         end
                         Room8Ativo = false
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while wait(1) do
+        if Config.Secretaria then
+            local misc = Workspace:FindFirstChild("Misc")
+            local checkIn = misc and misc:FindFirstChild("CheckIn")
+            if checkIn then
+                -- Ordem real do fluxo de registro: Camera (stamp) -> Badges -> Computer -> Printer
+                local ordem = {"Camera", "VisitorBadgeBase", "PatientBadgeBase", "Computer", "Printer"}
+                for _, nome in ipairs(ordem) do
+                    local parte = checkIn:FindFirstChild(nome)
+                    if parte then
+                        for _, child in ipairs(parte:GetDescendants()) do
+                            if child:IsA("ProximityPrompt") and child.Enabled then
+                                Interagir(child)
+                            end
+                        end
+                        -- Computer usa ClickDetector, não ProximityPrompt
+                        if nome == "Computer" then
+                            local keyboard = parte:FindFirstChild("Keyboard")
+                            local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
+                            local clicker = realKeyboard and realKeyboard:FindFirstChild("Clicker")
+                            if clicker and typeof(fireclickdetector) == "function" then
+                                Teleportar(realKeyboard.Position + Vector3.new(0, 1, 2))
+                                task.wait(0.15)
+                                pcall(function() fireclickdetector(clicker) end)
+                            end
+                        end
                     end
                 end
             end
@@ -887,7 +863,7 @@ if identifyexecutor then
 end
 
 Tab5:Label("Executor: " .. execName)
-Tab5:Label("Versao: v6.1")
+Tab5:Label("Versao: v6.2")
 Tab5:Label("by Silverfox Scripts")
 
 -- TAB 6: RESET
@@ -918,7 +894,10 @@ Tab6:Button({
         Room8Ativo = false
         ToggleFly(false)
         local hum = GetHum()
-        if hum then hum.WalkSpeed = 16 hum.JumpPower = 50 end
+        if hum then 
+            hum.WalkSpeed = 16
+            hum.JumpPower = 50 
+        end
     end,
 })
 
@@ -926,11 +905,11 @@ Tab6:Button({
 -- INIT
 -- ==========================================
 
-print("Silverfox Scripts | Hospital v6.1 CORRIGIDO")
+print("Silverfox Scripts | Hospital v6.2 CORRIGIDO")
 
 WindUI:Notify({
     Title = "Silverfox Scripts",
-    Content = "Script carregado!\nVersao: v6.1",
+    Content = "Script carregado!\nVersao: v6.2",
     Duration = 5,
     Icon = "check-circle",
 })
