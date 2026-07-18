@@ -69,6 +69,7 @@ _G.HospitalConfig = _G.HospitalConfig or {
     InstantAction = false,
     AutoProcess = false,
     AutoHeal = false,
+    AutoSecretaria = false,
     AutoRoom6 = false,
     AutoRoom7 = false,
     AutoRoom8 = false,
@@ -692,6 +693,117 @@ task.spawn(function()
 end)
 
 -- ==========================================
+-- FUNÇÕES DA SECRETARIA (BASEADO NO LOG)
+-- ==========================================
+
+local function FireSecretariaEvent(eventName, ...)
+    local Event = ReplicatedStorage.Util.Net:FindFirstChild(eventName)
+    if Event then
+        firesignal(Event.OnClientEvent, ...)
+    end
+end
+
+local function ExecutarSecretaria()
+    -- Etapa 1: Stamp the form (carimbar formulário)
+    local formPrompt = GetPromptByActionText("stamp", Workspace.Misc.CheckIn)
+    if formPrompt then
+        local part = FindBasePartInObject(formPrompt.Parent)
+        if part then
+            SafeTeleport(part.Position)
+            FirePromptDirect(formPrompt)
+            task.wait(0.3)
+        end
+    end
+
+    -- Etapa 2: Take a photo (tirar foto)
+    local cameraPrompt = GetPromptByActionText("photo", Workspace.Misc.CheckIn)
+    if cameraPrompt then
+        local part = FindBasePartInObject(cameraPrompt.Parent)
+        if part then
+            SafeTeleport(part.Position)
+            FirePromptDirect(cameraPrompt)
+            task.wait(0.5)
+
+            -- Revelar foto após tirar
+            local revealEvent = ReplicatedStorage.Util.Net:FindFirstChild("RE/RevealPhoto")
+            if revealEvent then
+                FireSecretariaEvent("RE/RevealPhoto", Workspace.Misc.CheckIn, workspace.NPCs["Yumi Wolfs"])
+                task.wait(0.3)
+            end
+        end
+    end
+
+    -- Etapa 3: Register in PC (registrar no computador)
+    local pcPrompt = GetPromptByActionText("register", Workspace.Misc.CheckIn.Computer)
+    if pcPrompt then
+        local part = FindBasePartInObject(pcPrompt.Parent)
+        if part then
+            SafeTeleport(part.Position)
+            FirePromptDirect(pcPrompt)
+            task.wait(0.3)
+        end
+    end
+
+    -- Etapa 4: Print Badge (imprimir crachá)
+    local printerPrompt = GetPromptByActionText("print badge", Workspace.Misc.CheckIn.Printer)
+    if printerPrompt then
+        local part = FindBasePartInObject(printerPrompt.Parent)
+        if part then
+            SafeTeleport(part.Position)
+            FirePromptDirect(printerPrompt)
+            task.wait(0.3)
+        end
+    end
+
+    -- Etapa 5: Take Badge (pegar crachá impresso)
+    local badgePrompt = GetPromptByActionText("take badge", Workspace.Misc.CheckIn.PrintedBadge)
+    if badgePrompt then
+        local part = FindBasePartInObject(badgePrompt.Parent)
+        if part then
+            SafeTeleport(part.Position)
+            FirePromptDirect(badgePrompt)
+            task.wait(0.3)
+        end
+    end
+
+    -- Etapa 6: Finish check-in (finalizar check-in)
+    local npcFolder = Workspace:FindFirstChild("NPCs")
+    if npcFolder then
+        for _, npc in ipairs(npcFolder:GetChildren()) do
+            for _, prompt in ipairs(npc:GetDescendants()) do
+                if prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                    local text = string.lower(prompt.ActionText or "")
+                    if string.find(text, "finish") or string.find(text, "check") then
+                        local part = FindBasePartInObject(prompt.Parent)
+                        if part then
+                            SafeTeleport(part.Position)
+                            FirePromptDirect(prompt)
+                            task.wait(0.3)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Loop automático para Secretaria
+task.spawn(function()
+    while true do
+        RunService.Heartbeat:Wait()
+        if Config.AutoSecretaria then
+            -- Só executa se estiver na área de check-in
+            local checkIn = Workspace:FindFirstChild("Misc") and Workspace.Misc:FindFirstChild("CheckIn")
+            if checkIn then
+                ExecutarSecretaria()
+                task.wait(2) -- Espera antes de repetir
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+-- ==========================================
 -- AUTO PROCESS (DNA/ANALYZE GLOBAL)
 -- ==========================================
 
@@ -1053,6 +1165,15 @@ MainTab:Toggle({
 })
 
 MainTab:Toggle({
+    Title = "Auto Secretaria (Check-in)",
+    Desc = "Executa automaticamente: Stamp -> Foto -> Register -> Print Badge -> Finish",
+    Value = false,
+    Callback = function(state)
+        Config.AutoSecretaria = state
+    end,
+})
+
+MainTab:Toggle({
     Title = "Auto Process",
     Desc = "Processa DNA e analisa automaticamente em todo o mapa",
     Value = false,
@@ -1228,6 +1349,7 @@ InfoTab:Button({
     Desc = "Desliga todas as funcoes",
     Callback = function()
         Config.AutoHeal = false
+        Config.AutoSecretaria = false
         Config.AutoProcess = false
         Config.InstantAction = false
         Config.AutoRoom6 = false
