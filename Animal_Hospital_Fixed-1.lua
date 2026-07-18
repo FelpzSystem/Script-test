@@ -4,7 +4,7 @@
 -- =====================================================================
 
 local WindUI = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"
+    "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
 ))()
 
 local Window = WindUI:CreateWindow({
@@ -689,7 +689,7 @@ end
 -- TAB 1: ATENDIMENTO
 local Tab1 = Window:Tab({Title = "Atendimento", Icon = "home"})
 
-Tab1:Label("Hospital - Funcoes de Atendimento")
+Tab1:Paragraph({ Title = "Hospital - Funcoes de Atendimento" })
 
 Tab1:Toggle({
     Title = "Secretaria",
@@ -726,7 +726,7 @@ Tab1:Toggle({
 -- TAB 2: AUTO
 local Tab2 = Window:Tab({Title = "Auto", Icon = "sparkles"})
 
-Tab2:Label("Funcoes Automaticas")
+Tab2:Paragraph({ Title = "Funcoes Automaticas" })
 
 Tab2:Toggle({
     Title = "Auto Accept Patient",
@@ -773,7 +773,7 @@ Tab2:Toggle({
 -- TAB 3: VISUAL
 local Tab3 = Window:Tab({Title = "Visual", Icon = "eye"})
 
-Tab3:Label("Recursos Visuais")
+Tab3:Paragraph({ Title = "Recursos Visuais" })
 
 Tab3:Toggle({
     Title = "Name ESP",
@@ -792,7 +792,7 @@ Tab3:Toggle({
 -- TAB 4: UTILIDADES
 local Tab4 = Window:Tab({Title = "Utilidades", Icon = "user"})
 
-Tab4:Label("Controles do Personagem")
+Tab4:Paragraph({ Title = "Controles do Personagem" })
 
 Tab4:Toggle({
     Title = "NoClip",
@@ -841,7 +841,7 @@ Tab4:Toggle({
 -- TAB 5: SERVIDOR
 local Tab5 = Window:Tab({Title = "Servidor", Icon = "globe"})
 
-Tab5:Label("Opcoes de Servidor")
+Tab5:Paragraph({ Title = "Opcoes de Servidor" })
 
 Tab5:Button({
     Title = "Server Hop",
@@ -853,23 +853,21 @@ Tab5:Button({
     end,
 })
 
-Tab5:Label("")
-Tab5:Label("Info do Executor:")
-
 local execName = "Desconhecido"
 if identifyexecutor then
     local ok, name = pcall(identifyexecutor)
     if ok then execName = name or "Desconhecido" end
 end
 
-Tab5:Label("Executor: " .. execName)
-Tab5:Label("Versao: v6.2")
-Tab5:Label("by Silverfox Scripts")
+Tab5:Paragraph({
+    Title = "Info do Executor",
+    Desc = "Executor: " .. execName .. "\nVersao: v6.2\nby Silverfox Scripts",
+})
 
 -- TAB 6: RESET
 local Tab6 = Window:Tab({Title = "Reset", Icon = "settings"})
 
-Tab6:Label("Resetar Configuracoes")
+Tab6:Paragraph({ Title = "Resetar Configuracoes" })
 
 Tab6:Button({
     Title = "Resetar Velocidade",
