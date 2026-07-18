@@ -704,8 +704,13 @@ local function FireSecretariaEvent(eventName, ...)
 end
 
 local function ExecutarSecretaria()
+    local checkIn = Workspace:FindFirstChild("Misc") and Workspace.Misc:FindFirstChild("CheckIn")
+    if not checkIn then return end
+
+    local npcFolder = Workspace:FindFirstChild("NPCs")
+
     -- Etapa 1: Stamp the form (carimbar formulário)
-    local formPrompt = GetPromptByActionText("stamp", Workspace.Misc.CheckIn)
+    local formPrompt = GetPromptByActionText("stamp", checkIn)
     if formPrompt then
         local part = FindBasePartInObject(formPrompt.Parent)
         if part then
@@ -716,7 +721,7 @@ local function ExecutarSecretaria()
     end
 
     -- Etapa 2: Take a photo (tirar foto)
-    local cameraPrompt = GetPromptByActionText("photo", Workspace.Misc.CheckIn)
+    local cameraPrompt = GetPromptByActionText("photo", checkIn)
     if cameraPrompt then
         local part = FindBasePartInObject(cameraPrompt.Parent)
         if part then
@@ -727,58 +732,100 @@ local function ExecutarSecretaria()
             -- Revelar foto após tirar
             local revealEvent = ReplicatedStorage.Util.Net:FindFirstChild("RE/RevealPhoto")
             if revealEvent then
-                FireSecretariaEvent("RE/RevealPhoto", Workspace.Misc.CheckIn, workspace.NPCs["Yumi Wolfs"])
+                FireSecretariaEvent("RE/RevealPhoto", checkIn, nil)
                 task.wait(0.3)
             end
         end
     end
 
     -- Etapa 3: Register in PC (registrar no computador)
-    local pcPrompt = GetPromptByActionText("register", Workspace.Misc.CheckIn.Computer)
-    if pcPrompt then
-        local part = FindBasePartInObject(pcPrompt.Parent)
-        if part then
-            SafeTeleport(part.Position)
-            FirePromptDirect(pcPrompt)
-            task.wait(0.3)
+    local computer = checkIn:FindFirstChild("Computer")
+    if computer then
+        local pcPrompt = GetPromptByActionText("register", computer)
+        if not pcPrompt then
+            -- Tenta buscar em todo o checkIn
+            pcPrompt = GetPromptByActionText("register", checkIn)
+        end
+        if pcPrompt then
+            local part = FindBasePartInObject(pcPrompt.Parent)
+            if part then
+                SafeTeleport(part.Position)
+                FirePromptDirect(pcPrompt)
+                task.wait(0.3)
+            end
         end
     end
 
     -- Etapa 4: Print Badge (imprimir crachá)
-    local printerPrompt = GetPromptByActionText("print badge", Workspace.Misc.CheckIn.Printer)
-    if printerPrompt then
-        local part = FindBasePartInObject(printerPrompt.Parent)
-        if part then
-            SafeTeleport(part.Position)
-            FirePromptDirect(printerPrompt)
-            task.wait(0.3)
+    local printer = checkIn:FindFirstChild("Printer")
+    if printer then
+        local printerPrompt = GetPromptByActionText("print", printer)
+        if not printerPrompt then
+            printerPrompt = GetPromptByActionText("badge", printer)
+        end
+        if not printerPrompt then
+            printerPrompt = GetPromptByActionText("print", checkIn)
+        end
+        if printerPrompt then
+            local part = FindBasePartInObject(printerPrompt.Parent)
+            if part then
+                SafeTeleport(part.Position)
+                FirePromptDirect(printerPrompt)
+                task.wait(0.5)
+            end
         end
     end
 
     -- Etapa 5: Take Badge (pegar crachá impresso)
-    local badgePrompt = GetPromptByActionText("take badge", Workspace.Misc.CheckIn.PrintedBadge)
-    if badgePrompt then
-        local part = FindBasePartInObject(badgePrompt.Parent)
-        if part then
-            SafeTeleport(part.Position)
-            FirePromptDirect(badgePrompt)
-            task.wait(0.3)
+    local printedBadge = checkIn:FindFirstChild("PrintedBadge")
+    if printedBadge then
+        for _, desc in ipairs(printedBadge:GetDescendants()) do
+            if desc:IsA("ProximityPrompt") and desc.Enabled then
+                local part = FindBasePartInObject(desc.Parent)
+                if part then
+                    SafeTeleport(part.Position)
+                    FirePromptDirect(desc)
+                    task.wait(0.3)
+                    break
+                end
+            end
         end
     end
 
-    -- Etapa 6: Finish check-in (finalizar check-in)
-    local npcFolder = Workspace:FindFirstChild("NPCs")
+    -- Etapa 6: Give Badge e Finish check-in (dar badge pro paciente e finalizar)
     if npcFolder then
+        for _, npc in ipairs(npcFolder:GetChildren()) do
+            -- Procura prompt para dar badge/cartão
+            for _, prompt in ipairs(npc:GetDescendants()) do
+                if prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                    local text = string.lower(prompt.ActionText or "")
+                    -- Dar badge pro paciente
+                    if string.find(text, "badge") or string.find(text, "card") or string.find(text, "give") then
+                        local part = FindBasePartInObject(prompt.Parent)
+                        if part then
+                            SafeTeleport(part.Position)
+                            FirePromptDirect(prompt)
+                            task.wait(0.3)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Procura NPC esperando para finalizar
+        task.wait(0.5)
         for _, npc in ipairs(npcFolder:GetChildren()) do
             for _, prompt in ipairs(npc:GetDescendants()) do
                 if prompt:IsA("ProximityPrompt") and prompt.Enabled then
                     local text = string.lower(prompt.ActionText or "")
+                    -- Finish check-in
                     if string.find(text, "finish") or string.find(text, "check") then
                         local part = FindBasePartInObject(prompt.Parent)
                         if part then
                             SafeTeleport(part.Position)
                             FirePromptDirect(prompt)
                             task.wait(0.3)
+                            return -- Check-in completo
                         end
                     end
                 end
