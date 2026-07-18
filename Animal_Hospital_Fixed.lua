@@ -265,7 +265,20 @@ task.spawn(function()
             if checkIn then
                 local camera = checkIn:FindFirstChild("Camera")
                 if camera then
-                    local p = BuscarPrompt("stamp", camera) or BuscarPrompt("take", camera)
+                    -- Pega o prompt direto pelo nome (PP), com fallback pra busca por texto
+                    local p = camera:FindFirstChild("PP")
+                    if not p then
+                        p = BuscarPrompt("stamp", camera) or BuscarPrompt("take", camera) or BuscarPrompt("photo", camera)
+                    end
+                    if not p then
+                        -- Fallback: pega qualquer ProximityPrompt habilitado dentro da Camera
+                        for _, c in ipairs(camera:GetDescendants()) do
+                            if c:IsA("ProximityPrompt") and c.Enabled then
+                                p = c
+                                break
+                            end
+                        end
+                    end
                     if p then Interagir(p) end
                 end
             end
@@ -281,6 +294,14 @@ task.spawn(function()
             if checkIn then
                 local computer = checkIn:FindFirstChild("Computer")
                 if computer then
+                    -- 1) Prompt do formulário direto no Computer (PP)
+                    local formPrompt = computer:FindFirstChild("PP")
+                    if formPrompt and formPrompt:IsA("ProximityPrompt") and formPrompt.Enabled then
+                        Interagir(formPrompt)
+                        task.wait(0.15)
+                    end
+
+                    -- 2) Clicker do teclado (Computer.Keyboard.Keyboard.Clicker)
                     local keyboard = computer:FindFirstChild("Keyboard")
                     local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
                     if realKeyboard then
@@ -622,17 +643,27 @@ task.spawn(function()
             local misc = Workspace:FindFirstChild("Misc")
             local checkIn = misc and misc:FindFirstChild("CheckIn")
             if checkIn then
-                -- Ordem real do fluxo de registro: Camera (stamp) -> Badges -> Computer -> Printer
+                -- Ordem real do fluxo de registro: Camera (foto) -> Badges -> Computer (formulário) -> Printer
                 local ordem = {"Camera", "VisitorBadgeBase", "PatientBadgeBase", "Computer", "Printer"}
                 for _, nome in ipairs(ordem) do
                     local parte = checkIn:FindFirstChild(nome)
                     if parte then
-                        for _, child in ipairs(parte:GetDescendants()) do
-                            if child:IsA("ProximityPrompt") and child.Enabled then
-                                Interagir(child)
+                        -- Prompt direto na própria parte (ex: Camera.PP, Computer.PP)
+                        local promptDireto = parte:FindFirstChild("PP")
+                        if promptDireto and promptDireto:IsA("ProximityPrompt") and promptDireto.Enabled then
+                            Interagir(promptDireto)
+                            task.wait(0.4)
+                        else
+                            -- Fallback: qualquer ProximityPrompt dentro da parte
+                            for _, child in ipairs(parte:GetDescendants()) do
+                                if child:IsA("ProximityPrompt") and child.Enabled then
+                                    Interagir(child)
+                                    task.wait(0.4)
+                                end
                             end
                         end
-                        -- Computer usa ClickDetector, não ProximityPrompt
+
+                        -- Computer também usa ClickDetector no teclado
                         if nome == "Computer" then
                             local keyboard = parte:FindFirstChild("Keyboard")
                             local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
@@ -641,6 +672,7 @@ task.spawn(function()
                                 Teleportar(realKeyboard.Position + Vector3.new(0, 1, 2))
                                 task.wait(0.15)
                                 pcall(function() fireclickdetector(clicker) end)
+                                task.wait(0.4)
                             end
                         end
                     end
