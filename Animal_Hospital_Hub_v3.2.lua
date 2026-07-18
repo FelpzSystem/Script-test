@@ -1,5 +1,5 @@
 -- =====================================================================
--- ANIMAL HOSPITAL HUB v3.1 (ULTRA FAST - OMNI LOOK-AT TARGET)
+-- ANIMAL HOSPITAL HUB v3.2 (ULTRA FAST - OMNI LOOK-AT TARGET)
 -- Otimizado para Delta Executor - Mobile (Studio Lite Compliant)
 -- Cores: Dark, Crimson Red (Vermelho Escuro)
 -- SISTEMA DE FOCO VISUAL GLOBAL PARA TODOS OS PROXIMITYPROMPTS
@@ -34,7 +34,8 @@ if not _G.HospitalConfig then
         FPSBoost = false,
         FlyEnabled = false,
         FlySpeed = 50,
-        HighlightsEnabled = false
+        HighlightsEnabled = false,
+        KeepSanity = true
     }
 end
 local Config = _G.HospitalConfig
@@ -1088,6 +1089,39 @@ task.spawn(function()
 end)
 
 -- ==========================================
+-- SANIDADE (mantém a sanidade sempre cheia)
+-- Usa o módulo "Lib" do próprio jogo (ReplicatedStorage.Lib) pra interceptar
+-- o evento que reduz a sanidade, além de forçar via Attribute continuamente.
+-- Já vem ATIVADO por padrão.
+-- ==========================================
+local SanityLib = nil
+pcall(function()
+    local libModule = ReplicatedStorage:WaitForChild("Lib", 5)
+    if libModule then
+        SanityLib = require(libModule)
+    end
+end)
+
+local function KeepSanityFull()
+    if not Config.KeepSanity then return end
+    pcall(function()
+        LocalPlayer:SetAttribute("Sanity", 100)
+    end)
+end
+
+if SanityLib and SanityLib.Inject then
+    pcall(function()
+        SanityLib.Inject("PlayerLostSanity", KeepSanityFull)
+    end)
+else
+    warn("[Hospital Hub] Módulo Lib não encontrado — sanidade só será forçada via Attribute (sem interceptar o evento).")
+end
+
+LocalPlayer:GetAttributeChangedSignal("Sanity"):Connect(KeepSanityFull)
+RunService.Heartbeat:Connect(KeepSanityFull)
+KeepSanityFull()
+
+-- ==========================================
 -- AUTO SECRETARIA (CHECK-IN) v3 - baseado na estrutura REAL do jogo
 -- (Workspace.Misc.CheckIn): Camera -> Computer -> Printer (aguarda 1.5s) ->
 -- Pegar Crachá (VisitorBadgeBase / PatientBadgeBase) -> Entregar ao NPC
@@ -1184,6 +1218,48 @@ local function HasBadgeItem()
     return false, nil
 end
 
+-- Interage com o ProximityPrompt do PRÓPRIO paciente/NPC (não do balcão).
+-- O jogo reaproveita esse mesmo prompt em estágios diferentes do check-in:
+-- primeiro pra "carimbar o formulário" (isso é o que HABILITA a Camera.PP
+-- depois) e, no final, pra "entregar o crachá". Por isso usamos uma função
+-- genérica em vez de procurar um objeto fixo chamado "Form".
+local function DoPatientPromptStep(label, waitAfter, acceptCheck)
+    waitAfter = waitAfter or 0.6
+    for attempt = 1, STEP_RETRIES do
+        if not Config.AutoSecretaria then return false end
+
+        local npcModel, patientPart = GetWaitingPatient()
+        if not npcModel or not patientPart then
+            print("⚠️ Secretária: procurando paciente pra '" .. label .. "'... (tentativa " .. attempt .. ")")
+        else
+            SafeTeleport(GetApproachPosition(patientPart.Position, 3))
+            LookAtPosition(patientPart.Position)
+            task.wait(0.2)
+
+            local prompt = nil
+            for _, desc in ipairs(npcModel:GetDescendants()) do
+                if desc:IsA("ProximityPrompt") and desc.Enabled then
+                    prompt = desc
+                    break
+                end
+            end
+
+            if prompt then
+                print("📋 Secretária: " .. label .. " (" .. npcModel.Name .. ") tentativa " .. attempt .. "...")
+                local ok = FirePromptWithCamera(prompt, patientPart.Position)
+                task.wait(waitAfter)
+                if ok and (not acceptCheck or acceptCheck()) then return true end
+            else
+                print("⏳ Secretária: prompt do paciente ainda não habilitado pra '" .. label .. "'...")
+            end
+        end
+
+        task.wait(0.3)
+    end
+    print("⚠️ Secretária: não foi possível concluir '" .. label .. "' após " .. STEP_RETRIES .. " tentativas.")
+    return false
+end
+
 -- Acha o prompt de pegar o crachá já impresso, testando os dois nomes reais
 -- que o jogo usa (visitante ou paciente, dependendo do tipo de check-in atual)
 local function GetPrintedBadgePrompt()
@@ -1232,48 +1308,9 @@ local function DeliverBadgeToPatient()
         task.wait(0.15)
     end
 
-    for attempt = 1, STEP_RETRIES do
-        if not Config.AutoSecretaria then return false end
-
-        -- Busca de novo a cada tentativa: o NPC "esperando" pode mudar,
-        -- e o prompt só existe/habilita perto do jogador com o crachá equipado
-        local npcModel, patientPart = GetWaitingPatient()
-        if not npcModel or not patientPart then
-            print("⚠️ Secretária: procurando paciente aguardando... (tentativa " .. attempt .. ")")
-            task.wait(0.4)
-        else
-            -- Aproxima a poucos studs do NPC em vez de teleportar em cima dele:
-            -- teleportar exatamente na posição do NPC causa colisão física e
-            -- empurra o jogador para longe antes do prompt disparar (bug comum)
-            SafeTeleport(GetApproachPosition(patientPart.Position, 3))
-            LookAtPosition(patientPart.Position)
-            task.wait(0.25)
-
-            local bestPrompt = nil
-            for _, desc in ipairs(npcModel:GetDescendants()) do
-                if desc:IsA("ProximityPrompt") and desc.Enabled then
-                    bestPrompt = desc
-                    break
-                end
-            end
-
-            if bestPrompt then
-                print("🤝 Secretária: entregando crachá a " .. npcModel.Name .. " (tentativa " .. attempt .. ")...")
-                local ok = FirePromptWithCamera(bestPrompt, patientPart.Position)
-                task.wait(0.5)
-                local stillHasBadge = HasBadgeItem()
-                if ok and not stillHasBadge then return true end
-                if ok and attempt >= 2 then return true end
-            else
-                print("⏳ Secretária: prompt de entrega ainda não habilitado, aguardando...")
-            end
-        end
-
-        task.wait(0.3)
-    end
-
-    print("⚠️ Secretária: não conseguiu confirmar a entrega do crachá.")
-    return false
+    return DoPatientPromptStep("Entregando Crachá", 0.5, function()
+        return not HasBadgeItem()
+    end)
 end
 
 local function AutoSecretariaSequence()
@@ -1285,23 +1322,29 @@ local function AutoSecretariaSequence()
 
     print("🗂️ Iniciando Auto Secretária (Check-In)...")
 
-    -- 1) Tirar a foto do paciente (Camera.PP)
+    -- 1) Carimbar o formulário: interage com o prompt do PRÓPRIO paciente
+    -- (é essa etapa que HABILITA a Camera.PP depois — por isso a foto não
+    -- estava funcionando quando esse passo era pulado)
+    if not DoPatientPromptStep("Carimbando Formulário") then return end
+    if not Config.AutoSecretaria then return end
+
+    -- 2) Tirar a foto do paciente (Camera.PP)
     if not DoCheckInStep("Camera", "Tirando Foto") then return end
     if not Config.AutoSecretaria then return end
 
-    -- 2) Registrar no computador (Computer.PP)
+    -- 3) Registrar no computador (Computer.PP)
     if not DoCheckInStep("Computer", "Registrando no Computador") then return end
     if not Config.AutoSecretaria then return end
 
-    -- 3) Imprimir o crachá (Printer.PP, aguarda 1.5s pra impressora terminar)
+    -- 4) Imprimir o crachá (Printer.PP, aguarda 1.5s pra impressora terminar)
     if not DoCheckInStep("Printer", "Imprimindo Crachá", PRINTER_WAIT_TIME) then return end
     if not Config.AutoSecretaria then return end
 
-    -- 4) Pegar o crachá impresso (VisitorBadgeBase / PatientBadgeBase, com validação de inventário)
+    -- 5) Pegar o crachá impresso (VisitorBadgeBase / PatientBadgeBase, com validação de inventário)
     if not PickUpPrintedBadge() then return end
     if not Config.AutoSecretaria then return end
 
-    -- 5) Entregar o crachá ao paciente que está esperando (NPC.PP)
+    -- 6) Entregar o crachá ao paciente que está esperando (prompt do próprio NPC)
     DeliverBadgeToPatient()
 
     print("✅ Auto Secretária: ciclo concluído!")
@@ -1358,7 +1401,7 @@ end)
 local Window = WindUI:CreateWindow({
     Title = "🏥 Animal Hospital Hub",
     Icon = "https://files.catbox.moe/0mg5gr.jpg",
-    Author = "v3.1 | RodrigoBloxYT",
+    Author = "v3.2 | RodrigoBloxYT",
     Theme = "Dark",
 })
 
@@ -1366,6 +1409,21 @@ local Window = WindUI:CreateWindow({
 -- TAB: PRINCIPAL — todas as automações do hub
 -- ==========================================
 local MainTab = Window:Tab({ Title = "Principal", Icon = "home" })
+
+MainTab:Paragraph({
+    Title = "🧠 Sobrevivência",
+    Desc = "Mantém sua sanidade sempre no máximo",
+})
+
+MainTab:Toggle({
+    Title = "Manter Sanidade Cheia",
+    Desc = "Já vem ativado — trava a sanidade em 100 o tempo todo",
+    Value = Config.KeepSanity,
+    Callback = function(state)
+        Config.KeepSanity = state
+        if state then KeepSanityFull() end
+    end,
+})
 
 MainTab:Paragraph({
     Title = "⚙️ Automações",
@@ -1674,22 +1732,22 @@ AboutTab:Paragraph({
 
 AboutTab:Paragraph({
     Title = "✨ Versão & Créditos",
-    Desc = "Versão: v3.1\nCriador: RodrigoBloxYT\nExecutor: Delta",
+    Desc = "Versão: v3.2\nCriador: RodrigoBloxYT\nExecutor: Delta",
 })
 
 AboutTab:Paragraph({
-    Title = "⚡ Novidades v3.1",
-    Desc = "• Novo: Remover Fog (aba Visual)\n"
+    Title = "⚡ Novidades v3.2",
+    Desc = "• Novo: Manter Sanidade Cheia — já vem ATIVADO (aba Principal)\n"
+        .. "• Corrigido: Auto Secretária não carimbava o formulário nem\n"
+        .. "   tirava a foto (faltava a etapa de interagir com o próprio\n"
+        .. "   paciente antes — é isso que habilita a Camera.PP)\n"
+        .. "• Novo: Remover Fog (aba Visual)\n"
         .. "• Novo: FPS Boost (aba Visual)\n"
         .. "• Novo: Força do Pulo / Jump Power (aba Utilidades)\n"
         .. "• Novo: Fly / Voo com controle por câmera (aba Utilidades)\n"
         .. "• Novo: Highlights — verde no paciente, vermelho na anomalia\n"
         .. "   (aba Visual)\n"
-        .. "• Abas reorganizadas: Principal, Utilidades, Visual, Misc, Sobre\n"
-        .. "• Auto Secretária: fluxo corrigido pra estrutura real do jogo\n"
-        .. "   (Camera → Computer → Printer → Crachá → Entrega ao NPC)\n"
-        .. "• Corrigido: entrega de crachá ao paciente não funcionava\n"
-        .. "   (teleporte em cima do NPC causava colisão/empurrão físico)",
+        .. "• Abas reorganizadas: Principal, Utilidades, Visual, Misc, Sobre",
 })
 
 AboutTab:Paragraph({
@@ -1699,4 +1757,4 @@ AboutTab:Paragraph({
         .. "🔗 Link disponível na aba Misc",
 })
 
-print("🚀 [Hospital Hub v3.1] Interface WindUI carregada!")
+print("🚀 [Hospital Hub v3.2] Interface WindUI carregada!")
