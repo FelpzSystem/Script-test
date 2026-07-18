@@ -63,10 +63,11 @@ _G.HospitalConfig = {
 local Config = _G.HospitalConfig
 
 -- ==========================================
--- CONTROLE
+-- CONTROLE - ANTI-BUGS SYSTEM
 -- ==========================================
 
 local Mutex = false
+local SecretariaBusy = false
 
 local function LockMutex()
     while Mutex do task.wait(0.05) end
@@ -75,6 +76,13 @@ end
 
 local function UnlockMutex()
     Mutex = false
+end
+
+-- Sistema Anti-Bugs pra não bugar com outras funções
+local function IsOtherFunctionActive()
+    return Config.AutoProcess or Config.AutoHeal or Config.AutoRoom6 or 
+           Config.AutoRoom7 or Config.AutoRoom8 or Config.NoClip or 
+           Config.Fly or Config.HighJump
 end
 
 -- ==========================================
@@ -118,11 +126,16 @@ local function Teleportar(pos)
 end
 
 -- Teleporta até a peça alvo (se possível) e dispara um ProximityPrompt
+-- Com proteção anti-bugs pra não conflitar com outras funções
 local function Interagir(prompt, semTeleport)
     if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
         return false
     end
 
+    LockMutex()
+    
+    local sucesso = false
+    
     if not semTeleport then
         local pos = GetPartPos(prompt.Parent)
         if pos then
@@ -134,8 +147,6 @@ local function Interagir(prompt, semTeleport)
     if Config.InstantAction then
         pcall(function() prompt.HoldDuration = 0 end)
     end
-
-    local sucesso = false
 
     if typeof(fireproximityprompt) == "function" then
         pcall(function()
@@ -153,6 +164,7 @@ local function Interagir(prompt, semTeleport)
         end)
     end
 
+    UnlockMutex()
     return sucesso
 end
 
@@ -224,74 +236,99 @@ local function EsperarProcessar(prompt, timeout)
 end
 
 local function SecretariaSequencia()
+    -- Sistema Anti-Bugs: não executa se outra função estiver ativa
+    if SecretariaBusy then return end
+    if IsOtherFunctionActive() then return end
+    
+    SecretariaBusy = true
+    
     local checkIn = PegarCheckIn()
-    if not checkIn then return end
+    if not checkIn then 
+        SecretariaBusy = false
+        return 
+    end
 
-    -- 1) Foto (Câmera)
-    local camPrompt = Caminho(checkIn, "Camera", "PP")
-    if camPrompt and camPrompt.Enabled then
-        if EsperarEInteragir(camPrompt, 3) then
-            EsperarProcessar(camPrompt)
-            task.wait(0.3)
+    -- 1️⃣ CARIMBAR FORMULÁRIO (PatientBadgeBase) - PRIMEIRO AGORA
+    if Config.Secretaria then
+        local badgePrompt = Caminho(checkIn, "PatientBadgeBase", "PP")
+        if badgePrompt then
+            if EsperarEInteragir(badgePrompt, 8) then
+                EsperarProcessar(badgePrompt)
+                task.wait(0.5)
+            end
         end
     end
-    if not Config.Secretaria then return end
 
-    -- 2) Carimbar o formulário (PatientBadgeBase)
-    local badgePrompt = Caminho(checkIn, "PatientBadgeBase", "PP")
-    if badgePrompt then
-        if EsperarEInteragir(badgePrompt, 8) then
-            EsperarProcessar(badgePrompt)
-            task.wait(0.3)
+    -- 2️⃣ FOTO (Câmera) - DEPOIS
+    if Config.Secretaria then
+        local camPrompt = Caminho(checkIn, "Camera", "PP")
+        if camPrompt and camPrompt.Enabled then
+            if EsperarEInteragir(camPrompt, 3) then
+                EsperarProcessar(camPrompt)
+                task.wait(0.5)
+            end
         end
     end
-    if not Config.Secretaria then return end
 
-    -- 3) Pegar o Emblema/Crachá de Visitante (VisitorBadgeBase)
-    local visitorPrompt = Caminho(checkIn, "VisitorBadgeBase", "PP")
-    if visitorPrompt then
-        if EsperarEInteragir(visitorPrompt, 8) then
-            EsperarProcessar(visitorPrompt)
-            task.wait(0.3)
+    -- 3️⃣ Pegar o Emblema/Crachá de Visitante (VisitorBadgeBase)
+    if Config.Secretaria then
+        local visitorPrompt = Caminho(checkIn, "VisitorBadgeBase", "PP")
+        if visitorPrompt then
+            if EsperarEInteragir(visitorPrompt, 8) then
+                EsperarProcessar(visitorPrompt)
+                task.wait(0.5)
+            end
         end
     end
-    if not Config.Secretaria then return end
 
-    -- 4) Computador (abrir/usar)
-    local computer = checkIn:FindFirstChild("Computer")
-    local computerPrompt = computer and computer:FindFirstChild("PP")
-    if computerPrompt then
-        if EsperarEInteragir(computerPrompt, 8) then
-            task.wait(0.3)
+    -- 4️⃣ Computador (abrir/usar)
+    if Config.Secretaria then
+        local computer = checkIn:FindFirstChild("Computer")
+        local computerPrompt = computer and computer:FindFirstChild("PP")
+        if computerPrompt then
+            if EsperarEInteragir(computerPrompt, 8) then
+                task.wait(0.5)
+            end
         end
     end
-    if not Config.Secretaria then return end
 
-    -- 5) Teclado do computador (clicker)
-    if computer then
-        local teclado = Caminho(computer, "Keyboard", "Keyboard")
-        local clicker = teclado and teclado:FindFirstChild("Clicker")
-        if clicker then
-            Clicar(clicker)
-            task.wait(0.4)
+    -- 5️⃣ Teclado do computador (clicker)
+    if Config.Secretaria then
+        local computer = checkIn:FindFirstChild("Computer")
+        if computer then
+            local teclado = Caminho(computer, "Keyboard", "Keyboard")
+            local clicker = teclado and teclado:FindFirstChild("Clicker")
+            if clicker then
+                Clicar(clicker)
+                task.wait(0.5)
+            end
         end
     end
-    if not Config.Secretaria then return end
 
-    -- 6) Impressora
-    local printerPrompt = Caminho(checkIn, "Printer", "PP")
-    if printerPrompt then
-        EsperarEInteragir(printerPrompt, 8)
-        task.wait(0.4)
+    -- 6️⃣ Impressora
+    if Config.Secretaria then
+        local printerPrompt = Caminho(checkIn, "Printer", "PP")
+        if printerPrompt then
+            EsperarEInteragir(printerPrompt, 8)
+            task.wait(0.5)
+        end
     end
+    
+    SecretariaBusy = false
 end
 
+-- LOOP SECRETÁRIA com Sistema Anti-Bugs
 task.spawn(function()
     while true do
-        RunService.Heartbeat:Wait()
         if Config.Secretaria then
-            SecretariaSequencia()
-            task.wait(1)
+            -- Verifica se não há outras funções ativas pra evitar conflito
+            if not IsOtherFunctionActive() then
+                SecretariaSequencia()
+            end
+            task.wait(1) -- Executa a cada 1 segundo
+        else
+            task.wait(0.5) -- Se desativado, espera menos
+            SecretariaBusy = false -- Reset do busy flag
         end
     end
 end)
