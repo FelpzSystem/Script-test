@@ -12,8 +12,38 @@ local WindUI = loadstring(game:HttpGet(
 local Window = WindUI:CreateWindow({
     Title = "SILVERFOX SCRIPTS | HOSPITAL DE ANIMAIS",
     Icon = "https://files.catbox.moe/vr0nkt.jpg",
+    Author = "by Silverfox Scripts",
+    Folder = "SilverfoxHospital", -- salva as configs entre sessões
     Theme = "Dark",
     Size = UDim2.fromOffset(650, 550),
+    Resizable = true,
+    HasOutline = true,
+    Transparent = true,
+    Background = WindUI:Gradient({
+        ["0"]   = { Color = Color3.fromHex("#0f0c29"), Transparency = 1 },
+        ["100"] = { Color = Color3.fromHex("#302b63"), Transparency = 0.9 },
+    }, {
+        Rotation = 45,
+    }),
+    OpenButton = {
+        Title = "Silverfox Hub",
+        Enabled = true,
+        Draggable = true,
+        CornerRadius = UDim.new(1, 0),
+        StrokeThickness = 2,
+        Color = ColorSequence.new(
+            Color3.fromHex("#7f5af0"),
+            Color3.fromHex("#2cb67d")
+        ),
+    },
+})
+
+-- Tag com a versão no topo da janela
+Window:Tag({
+    Title = "v2.9.9",
+    Icon = "sparkles",
+    Color = Color3.fromHex("#1c1c1c"),
+    Border = true,
 })
 
 -- ==========================================
@@ -25,6 +55,8 @@ local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local SoundService = game:GetService("SoundService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -44,6 +76,10 @@ _G.HospitalConfig = _G.HospitalConfig or {
     WalkSpeed = 16,
     Fly = false,
     FlySpeed = 50,
+    SanityLock = false,
+    NoFog = false,
+    FpsBoost = false,
+    BlackScreen = false,
 }
 local Config = _G.HospitalConfig
 
@@ -752,6 +788,33 @@ task.spawn(function()
 end)
 
 -- ==========================================
+-- SANIDADE INFINITA
+-- ==========================================
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local function keepSanityFull()
+    if not Config.SanityLock then return end
+    pcall(function()
+        LocalPlayer:SetAttribute("Sanity", 100)
+    end)
+end
+
+task.spawn(function()
+    local ok, Library = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("Lib"))
+    end)
+    if ok and Library and Library.Inject then
+        pcall(function()
+            Library.Inject("PlayerLostSanity", keepSanityFull)
+        end)
+    end
+end)
+
+LocalPlayer:GetAttributeChangedSignal("Sanity"):Connect(keepSanityFull)
+RunService.Heartbeat:Connect(keepSanityFull)
+
+-- ==========================================
 -- HOOK DE PROMPTS (Instant Action)
 -- ==========================================
 
@@ -874,6 +937,105 @@ end)
 -- WINDUI - TABS E CONTROLES
 -- ==========================================
 
+-- ==========================================
+-- NO FOG
+-- ==========================================
+
+local OriginalFog = {
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    FogColor = Lighting.FogColor,
+}
+
+local function SetNoFog(state)
+    Config.NoFog = state
+    if state then
+        Lighting.FogEnd = 1e6
+        Lighting.FogStart = 0
+    else
+        Lighting.FogEnd = OriginalFog.FogEnd
+        Lighting.FogStart = OriginalFog.FogStart
+        Lighting.FogColor = OriginalFog.FogColor
+    end
+end
+
+-- ==========================================
+-- FPS BOOST
+-- ==========================================
+
+local FpsBoostRemoved = {}
+
+local function SetFpsBoost(state)
+    Config.FpsBoost = state
+    if state then
+        -- Desliga efeitos pesados de Lighting
+        for _, fx in ipairs(Lighting:GetChildren()) do
+            if fx:IsA("BloomEffect") or fx:IsA("BlurEffect") or fx:IsA("SunRaysEffect")
+                or fx:IsA("ColorCorrectionEffect") or fx:IsA("DepthOfFieldEffect") then
+                if fx.Enabled then
+                    fx.Enabled = false
+                    table.insert(FpsBoostRemoved, fx)
+                end
+            end
+        end
+        Lighting.GlobalShadows = false
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        Workspace.StreamingEnabled = Workspace.StreamingEnabled -- mantém, só evita erro se não suportado
+        -- Reduz partículas e decals para menos carga de render
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") or desc:IsA("Trail") then
+                desc.Enabled = false
+            end
+        end
+    else
+        for _, fx in ipairs(FpsBoostRemoved) do
+            if fx and fx.Parent then fx.Enabled = true end
+        end
+        FpsBoostRemoved = {}
+        Lighting.GlobalShadows = true
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            if desc:IsA("ParticleEmitter") or desc:IsA("Trail") then
+                desc.Enabled = true
+            end
+        end
+    end
+end
+
+-- ==========================================
+-- BLACK SCREEN (ANTI-SCREAM / AFK)
+-- ==========================================
+
+local BlackScreenGui
+
+local function SetBlackScreen(state)
+    Config.BlackScreen = state
+    if state then
+        if not BlackScreenGui then
+            BlackScreenGui = Instance.new("ScreenGui")
+            BlackScreenGui.Name = "SilverfoxBlackScreen"
+            BlackScreenGui.IgnoreGuiInset = true
+            BlackScreenGui.DisplayOrder = 999
+            BlackScreenGui.ResetOnSpawn = false
+
+            local Frame = Instance.new("Frame")
+            Frame.Size = UDim2.fromScale(1, 1)
+            Frame.BackgroundColor3 = Color3.new(0, 0, 0)
+            Frame.BorderSizePixel = 0
+            Frame.Parent = BlackScreenGui
+
+            BlackScreenGui.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+        end
+        BlackScreenGui.Enabled = true
+        SoundService.Volume = 0 -- silencia sons/jumpscares junto com a tela preta
+    else
+        if BlackScreenGui then
+            BlackScreenGui.Enabled = false
+        end
+        SoundService.Volume = 1
+    end
+end
+
 -- Tab Principal
 local MainTab = Window:Tab({
     Title = "Principal",
@@ -882,7 +1044,7 @@ local MainTab = Window:Tab({
 
 MainTab:Toggle({
     Title = "Auto Heal",
-    Description = "Coleta itens e trata pacientes automaticamente (Rooms 1-6)",
+    Desc = "Coleta itens e trata pacientes automaticamente (Rooms 1-6)",
     Value = false,
     Callback = function(state)
         Config.AutoHeal = state
@@ -892,7 +1054,7 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Auto Process",
-    Description = "Processa DNA e analisa automaticamente em todo o mapa",
+    Desc = "Processa DNA e analisa automaticamente em todo o mapa",
     Value = false,
     Callback = function(state)
         Config.AutoProcess = state
@@ -901,7 +1063,7 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Instant Action",
-    Description = "Remove tempo de espera dos prompts",
+    Desc = "Remove tempo de espera dos prompts",
     Value = false,
     Callback = function(state)
         Config.InstantAction = state
@@ -917,7 +1079,7 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Auto Room 6 (X-Ray)",
-    Description = "Sequência: X-Ray -> 4 botões -> Process -> Badge -> Collect",
+    Desc = "Sequência: X-Ray -> 4 botões -> Process -> Badge -> Collect",
     Value = false,
     Callback = function(state)
         Config.AutoRoom6 = state
@@ -926,7 +1088,7 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Auto Room 7",
-    Description = "Interações automáticas no InBed da Room 7",
+    Desc = "Interações automáticas no InBed da Room 7",
     Value = false,
     Callback = function(state)
         Config.AutoRoom7 = state
@@ -935,10 +1097,19 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Auto Room 8",
-    Description = "Sleep Patient automático no InBed da Room 8",
+    Desc = "Sleep Patient automático no InBed da Room 8",
     Value = false,
     Callback = function(state)
         Config.AutoRoom8 = state
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Sanidade Infinita",
+    Desc = "Mantém a Sanidade sempre em 100",
+    Value = false,
+    Callback = function(state)
+        Config.SanityLock = state
     end,
 })
 
@@ -950,7 +1121,7 @@ local PlayerTab = Window:Tab({
 
 PlayerTab:Toggle({
     Title = "NoClip",
-    Description = "Atravessa paredes e objetos",
+    Desc = "Atravessa paredes e objetos",
     Value = false,
     Callback = function(state)
         Config.NoClip = state
@@ -959,10 +1130,13 @@ PlayerTab:Toggle({
 
 PlayerTab:Slider({
     Title = "WalkSpeed",
-    Description = "Velocidade do personagem",
-    Value = 16,
-    Min = 1,
-    Max = 200,
+    Desc = "Velocidade do personagem",
+    Step = 1,
+    Value = {
+        Min = 1,
+        Max = 200,
+        Default = 16,
+    },
     Callback = function(value)
         Config.WalkSpeed = value
     end,
@@ -970,7 +1144,7 @@ PlayerTab:Slider({
 
 PlayerTab:Toggle({
     Title = "Fly",
-    Description = "Voar livremente pelo mapa",
+    Desc = "Voar livremente pelo mapa",
     Value = false,
     Callback = function(state)
         if state then
@@ -983,12 +1157,48 @@ PlayerTab:Toggle({
 
 PlayerTab:Slider({
     Title = "Fly Speed",
-    Description = "Velocidade do voo",
-    Value = 50,
-    Min = 10,
-    Max = 300,
+    Desc = "Velocidade do voo",
+    Step = 1,
+    Value = {
+        Min = 10,
+        Max = 300,
+        Default = 50,
+    },
     Callback = function(value)
         Config.FlySpeed = value
+    end,
+})
+
+-- Tab Extras
+local ExtrasTab = Window:Tab({
+    Title = "Extras",
+    Icon = "sparkles"
+})
+
+ExtrasTab:Toggle({
+    Title = "No Fog",
+    Desc = "Remove a neblina do mapa",
+    Value = false,
+    Callback = function(state)
+        SetNoFog(state)
+    end,
+})
+
+ExtrasTab:Toggle({
+    Title = "FPS Boost",
+    Desc = "Desliga efeitos graficos pesados",
+    Value = false,
+    Callback = function(state)
+        SetFpsBoost(state)
+    end,
+})
+
+ExtrasTab:Toggle({
+    Title = "Black Screen (AFK / Anti-Susto)",
+    Desc = "Tela preta e mutado, evita jumpscare enquanto voce fica afk",
+    Value = false,
+    Callback = function(state)
+        SetBlackScreen(state)
     end,
 })
 
@@ -1005,7 +1215,7 @@ InfoTab:Label("UI: WindUI")
 
 InfoTab:Button({
     Title = "Resetar Velocidade",
-    Description = "Volta para 16",
+    Desc = "Volta para 16",
     Callback = function()
         Config.WalkSpeed = 16
         local hum = GetHumanoid()
@@ -1015,7 +1225,7 @@ InfoTab:Button({
 
 InfoTab:Button({
     Title = "Desativar Tudo",
-    Description = "Desliga todas as funcoes",
+    Desc = "Desliga todas as funcoes",
     Callback = function()
         Config.AutoHeal = false
         Config.AutoProcess = false
@@ -1025,7 +1235,11 @@ InfoTab:Button({
         Config.AutoRoom8 = false
         Config.NoClip = false
         Config.WalkSpeed = 16
+        Config.SanityLock = false
         StopFly()
+        SetNoFog(false)
+        SetFpsBoost(false)
+        SetBlackScreen(false)
         local hum = GetHumanoid()
         if hum then hum.WalkSpeed = 16 end
     end,
@@ -1039,3 +1253,10 @@ print("=================================")
 print("Silverfox Scripts | Hospital de Animais")
 print("Versao: v2.9.9 Delta Mobile")
 print("=================================")
+
+WindUI:Notify({
+    Title = "Silverfox Scripts",
+    Content = "Script carregado com sucesso! ✅",
+    Duration = 4,
+    Icon = "check-circle",
+})
