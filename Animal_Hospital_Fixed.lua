@@ -263,15 +263,26 @@ task.spawn(function()
             local misc = Workspace:FindFirstChild("Misc")
             local checkIn = misc and misc:FindFirstChild("CheckIn")
             if checkIn then
-                local camera = checkIn:FindFirstChild("Camera")
-                if camera then
-                    -- Pega o prompt direto pelo nome (PP), com fallback pra busca por texto
-                    local p = camera:FindFirstChild("PP")
-                    if not p then
-                        p = BuscarPrompt("stamp", camera) or BuscarPrompt("take", camera) or BuscarPrompt("photo", camera)
+                local p = nil
+
+                -- 1) Busca pelo nome do objeto "Formulário(s) de Selo" em qualquer lugar do CheckIn
+                for _, obj in ipairs(checkIn:GetDescendants()) do
+                    if obj:IsA("ProximityPrompt") and obj.Enabled then
+                        local parentName = string.lower(obj.Parent and obj.Parent.Name or "")
+                        local actionText = string.lower(obj.ActionText or "")
+                        if string.find(parentName, "formul") or string.find(parentName, "selo") or
+                           string.find(actionText, "carimb") or string.find(actionText, "stamp") or
+                           string.find(actionText, "formul") then
+                            p = obj
+                            break
+                        end
                     end
-                    if not p then
-                        -- Fallback: pega qualquer ProximityPrompt habilitado dentro da Camera
+                end
+
+                -- 2) Fallback: qualquer prompt habilitado dentro da Camera (caso volte a ser lá)
+                if not p then
+                    local camera = checkIn:FindFirstChild("Camera")
+                    if camera then
                         for _, c in ipairs(camera:GetDescendants()) do
                             if c:IsA("ProximityPrompt") and c.Enabled then
                                 p = c
@@ -279,8 +290,24 @@ task.spawn(function()
                             end
                         end
                     end
-                    if p then Interagir(p) end
                 end
+
+                -- 3) Último fallback: qualquer prompt habilitado em todo o CheckIn que não seja de outra função conhecida
+                if not p then
+                    for _, obj in ipairs(checkIn:GetDescendants()) do
+                        if obj:IsA("ProximityPrompt") and obj.Enabled then
+                            local parentName = string.lower(obj.Parent and obj.Parent.Name or "")
+                            if not string.find(parentName, "computer") and
+                               not string.find(parentName, "printer") and
+                               not string.find(parentName, "badge") then
+                                p = obj
+                                break
+                            end
+                        end
+                    end
+                end
+
+                if p then Interagir(p) end
             end
         end
     end
@@ -643,38 +670,26 @@ task.spawn(function()
             local misc = Workspace:FindFirstChild("Misc")
             local checkIn = misc and misc:FindFirstChild("CheckIn")
             if checkIn then
-                -- Ordem real do fluxo de registro: Camera (foto) -> Badges -> Computer (formulário) -> Printer
-                local ordem = {"Camera", "VisitorBadgeBase", "PatientBadgeBase", "Computer", "Printer"}
-                for _, nome in ipairs(ordem) do
-                    local parte = checkIn:FindFirstChild(nome)
-                    if parte then
-                        -- Prompt direto na própria parte (ex: Camera.PP, Computer.PP)
-                        local promptDireto = parte:FindFirstChild("PP")
-                        if promptDireto and promptDireto:IsA("ProximityPrompt") and promptDireto.Enabled then
-                            Interagir(promptDireto)
-                            task.wait(0.4)
-                        else
-                            -- Fallback: qualquer ProximityPrompt dentro da parte
-                            for _, child in ipairs(parte:GetDescendants()) do
-                                if child:IsA("ProximityPrompt") and child.Enabled then
-                                    Interagir(child)
-                                    task.wait(0.4)
-                                end
-                            end
-                        end
+                -- Varre TUDO dentro de CheckIn, incluindo objetos soltos (ex: Formularios de Selo)
+                -- que não ficam necessariamente dentro de Camera/Computer/etc
+                for _, obj in ipairs(checkIn:GetDescendants()) do
+                    if obj:IsA("ProximityPrompt") and obj.Enabled then
+                        Interagir(obj)
+                        task.wait(0.4)
+                    end
+                end
 
-                        -- Computer também usa ClickDetector no teclado
-                        if nome == "Computer" then
-                            local keyboard = parte:FindFirstChild("Keyboard")
-                            local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
-                            local clicker = realKeyboard and realKeyboard:FindFirstChild("Clicker")
-                            if clicker and typeof(fireclickdetector) == "function" then
-                                Teleportar(realKeyboard.Position + Vector3.new(0, 1, 2))
-                                task.wait(0.15)
-                                pcall(function() fireclickdetector(clicker) end)
-                                task.wait(0.4)
-                            end
-                        end
+                -- Clicker do teclado do Computer (não é ProximityPrompt, precisa disparo separado)
+                local computer = checkIn:FindFirstChild("Computer")
+                if computer then
+                    local keyboard = computer:FindFirstChild("Keyboard")
+                    local realKeyboard = keyboard and keyboard:FindFirstChild("Keyboard")
+                    local clicker = realKeyboard and realKeyboard:FindFirstChild("Clicker")
+                    if clicker and typeof(fireclickdetector) == "function" then
+                        Teleportar(realKeyboard.Position + Vector3.new(0, 1, 2))
+                        task.wait(0.15)
+                        pcall(function() fireclickdetector(clicker) end)
+                        task.wait(0.4)
                     end
                 end
             end
