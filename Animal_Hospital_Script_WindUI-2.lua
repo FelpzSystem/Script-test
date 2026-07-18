@@ -840,6 +840,114 @@ task.spawn(AutoRoom7Loop)
 task.spawn(AutoRoom8Loop)
 
 -- ==========================================
+-- AUTO SECRETARIA (CHECK-IN)
+-- ==========================================
+if Config.AutoSecretaria == nil then Config.AutoSecretaria = false end
+
+-- Ordem real usada manualmente: Form -> Photo -> Computer -> Printer -> pegar crachá impresso -> entregar ao paciente
+local SecretariaSteps = {
+    "Form",
+    "Photo",
+    "Computer",
+    "Printer",
+    "PrintedBadge",
+}
+
+local function GetCheckInFolder()
+    local misc = Workspace:FindFirstChild("Misc")
+    if not misc then return nil end
+    return misc:FindFirstChild("CheckIn")
+end
+
+local function GetCheckInPrompt(checkIn, stepName)
+    local obj = checkIn:FindFirstChild(stepName)
+    if not obj then return nil end
+    if obj:IsA("ProximityPrompt") then return obj end
+    return obj:FindFirstChildOfClass("ProximityPrompt")
+end
+
+-- Depois de pegar o crachá impresso, entrega ao NPC/paciente mais próximo do CheckIn
+local function DeliverBadgeToPatient()
+    local root = GetRootPart()
+    if not root then return false end
+
+    local bestPrompt, bestPart, bestDist = nil, nil, math.huge
+
+    local npcsFolder = Workspace:FindFirstChild("NPCs")
+    if npcsFolder then
+        for _, npc in ipairs(npcsFolder:GetChildren()) do
+            for _, desc in ipairs(npc:GetDescendants()) do
+                if desc:IsA("ProximityPrompt") and desc.Enabled then
+                    local text = string.lower(desc.ActionText or "")
+                    if string.find(text, "badge") or string.find(text, "give") or string.find(text, "deliver") or string.find(text, "hand") then
+                        local part = FindBasePartInObject(desc.Parent) or FindBasePartInObject(npc)
+                        if part then
+                            local dist = (part.Position - root.Position).Magnitude
+                            if dist < bestDist then
+                                bestPrompt, bestPart, bestDist = desc, part, dist
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if bestPrompt and bestPart then
+        print("🤝 Entregando crachá ao paciente...")
+        SafeTeleport(bestPart.Position)
+        FirePromptWithCamera(bestPrompt, bestPart.Position)
+        task.wait(0.5)
+        return true
+    end
+
+    print("⚠️ Nenhum paciente próximo encontrado para entregar o crachá.")
+    return false
+end
+
+local function AutoSecretariaSequence()
+    local checkIn = GetCheckInFolder()
+    if not checkIn then
+        print("❌ Pasta CheckIn não encontrada!")
+        return
+    end
+
+    print("🗂️ Iniciando Auto Secretária (Check-In)...")
+
+    for _, stepName in ipairs(SecretariaSteps) do
+        if not Config.AutoSecretaria then break end
+
+        local prompt = GetCheckInPrompt(checkIn, stepName)
+        if prompt and prompt.Enabled then
+            local part = FindBasePartInObject(prompt.Parent)
+            if part then
+                print("📋 Secretária: " .. stepName .. "...")
+                SafeTeleport(part.Position)
+                FirePromptWithCamera(prompt, part.Position)
+                task.wait(0.6)
+            end
+        end
+    end
+
+    if Config.AutoSecretaria then
+        DeliverBadgeToPatient()
+    end
+
+    print("✅ Auto Secretária: ciclo concluído!")
+end
+
+task.spawn(function()
+    while true do
+        RunService.Heartbeat:Wait()
+        if Config.AutoSecretaria then
+            AutoSecretariaSequence()
+            print("⏳ Auto Secretária: aguardando 2 segundos antes de reiniciar...")
+            wait(2)
+        end
+    end
+end)
+
+-- ==========================================
 -- INTERFACE GRÁFICA (GUI PRESERVAÇÃO)
 -- ==========================================
 
@@ -949,6 +1057,26 @@ MainTab:Toggle({
 })
 
 -- ==========================================
+-- TAB: SECRETARIA
+-- ==========================================
+local SecretariaTab = Window:Tab({ Title = "Secretária", Icon = "clipboard-list" })
+
+SecretariaTab:Paragraph({
+    Title = "🗂️ Check-In Automático",
+    Desc = "Executa sozinho: Formulário → Foto → Computador → Impressora → Pegar crachá → Entregar ao paciente",
+})
+
+SecretariaTab:Toggle({
+    Title = "Auto Secretária",
+    Desc = "Completa o check-in de pacientes/visitantes em loop",
+    Value = Config.AutoSecretaria,
+    Callback = function(state)
+        Config.AutoSecretaria = state
+        if state then print("🗂️ Auto Secretária ativado!") end
+    end,
+})
+
+-- ==========================================
 -- TAB: LOCALPLAYER
 -- ==========================================
 local PlayerTab = Window:Tab({ Title = "LocalPlayer", Icon = "user" })
@@ -979,7 +1107,16 @@ PlayerTab:Toggle({
 local AboutTab = Window:Tab({ Title = "Sobre", Icon = "info" })
 
 AboutTab:Paragraph({
-    Title = "🏥 Animal Hospital Script",
+    Title = "🏥 Animal Hospital Hub",
+    Desc = "Obrigado por confiar no nosso trabalho! ❤️\n\n"
+        .. "Esse hub nasceu pra tornar sua experiência no Animal Hospital\n"
+        .. "mais leve, rápida e divertida — sem perder a magia do jogo.\n\n"
+        .. "Cada função foi pensada com carinho e testada de verdade,\n"
+        .. "pra você focar no que importa: se divertir com os amigos. 🐾",
+})
+
+AboutTab:Paragraph({
+    Title = "✨ Versão & Créditos",
     Desc = "Versão: v2.9.9\nCriador: RodrigoBloxYT\nExecutor: Delta",
 })
 
@@ -989,7 +1126,24 @@ AboutTab:Paragraph({
         .. "• Auto Room 6: Espera 4 botões mudarem de cor\n"
         .. "• Auto Room 6: Aguarda 1.5s antes de clicar\n"
         .. "• Auto Room 6: Procura Print Badge e Collect\n"
-        .. "• Auto Heal: Retry e validação de itens",
+        .. "• Auto Heal: Retry e validação de itens\n"
+        .. "• Novo: Auto Secretária (Check-In completo)",
+})
+
+AboutTab:Paragraph({
+    Title = "💬 Nosso Grupo",
+    Desc = "Entre pra comunidade, tire dúvidas, sugira ideias e\n"
+        .. "fique por dentro de todas as atualizações! 🚀\n\n"
+        .. "🔗 https://chat.whatsapp.com/HLYG7uoa4n7576WlnHngFb?s=cl&p=a&ilr=1",
+})
+
+AboutTab:Button({
+    Title = "📋 Copiar link do grupo",
+    Callback = function()
+        pcall(function()
+            setclipboard("https://chat.whatsapp.com/HLYG7uoa4n7576WlnHngFb?s=cl&p=a&ilr=1")
+        end)
+    end,
 })
 
 AboutTab:Button({
@@ -1010,6 +1164,7 @@ AboutTab:Button({
         Config.AutoRoom7 = false
         Config.AutoRoom8 = false
         Config.AutoHeal = false
+        Config.AutoSecretaria = false
         Config.NoClip = false
         RestoreOriginalCollisions()
         Config.WalkSpeed = 16
