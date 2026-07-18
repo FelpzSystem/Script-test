@@ -738,21 +738,156 @@ local function ExecutarSecretaria()
         end
     end
 
+    -- ==========================================
     -- Etapa 3: Register in PC (registrar no computador)
+    -- SOLUÇÃO 1: Teleport mais preciso
+    -- SOLUÇÃO 2: Múltiplos métodos de interação
+    -- SOLUÇÃO 3: Chamada direta de RemoteEvent
+    -- ==========================================
+
     local computer = checkIn:FindFirstChild("Computer")
-    if computer then
-        local pcPrompt = GetPromptByActionText("register", computer)
-        if not pcPrompt then
-            -- Tenta buscar em todo o checkIn
-            pcPrompt = GetPromptByActionText("register", checkIn)
-        end
-        if pcPrompt then
-            local part = FindBasePartInObject(pcPrompt.Parent)
-            if part then
-                SafeTeleport(part.Position)
-                FirePromptDirect(pcPrompt)
-                task.wait(0.3)
+    local pcRegistroSucesso = false
+    local maxTentativasPC = 3
+
+    for tentativaPC = 1, maxTentativasPC do
+        if pcRegistroSucesso then break end
+
+        -- Posicionamento preciso no computador
+        if computer then
+            local computerPart = FindBasePartInObject(computer)
+            if computerPart then
+                -- Teleport para posição otimizada (mais próximo do PC)
+                SafeTeleport(computerPart.Position + Vector3.new(0, 1, 2))
+                task.wait(0.2)
+
+                -- Método 1: ProximityPrompt padrão
+                local pcPrompt = GetPromptByActionText("register", computer)
+                if not pcPrompt then
+                    pcPrompt = GetPromptByActionText("register", checkIn)
+                end
+                if not pcPrompt then
+                    pcPrompt = GetPromptByActionText("pc", computer)
+                end
+                if not pcPrompt then
+                    pcPrompt = GetPromptByActionText("computer", computer)
+                end
+
+                if pcPrompt and pcPrompt:IsA("ProximityPrompt") and pcPrompt.Enabled then
+                    for attempt = 1, 3 do
+                        FirePromptDirect(pcPrompt)
+                        task.wait(0.3)
+                        pcRegistroSucesso = true
+                        break
+                    end
+                end
+
+                -- Método 2: Simular input do teclado (E key)
+                if not pcRegistroSucesso then
+                    local success2 = pcall(function()
+                        -- Verifica se há GUI do PC aberta
+                        local pcGui = computer:FindFirstChild("SurfaceGui") or computer:FindFirstChild("BillboardGui")
+                        if pcGui then
+                            -- Tenta enviar input de teclado
+                            local virtualInput = game:GetService("VirtualInputManager")
+                            virtualInput:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                            task.wait(0.1)
+                            virtualInput:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                        end
+                    end)
+                    if success2 then
+                        pcRegistroSucesso = true
+                        task.wait(0.3)
+                    end
+                end
+
+                -- Método 3: Tentar RemoteEvent direto
+                if not pcRegistroSucesso then
+                    pcall(function()
+                        -- Procura RemoteEvents relacionados a registro
+                        local remoteEvents = {
+                            "RE/RegisterPatient",
+                            "RE/Register",
+                            "RE/PCRegister",
+                            "RE/CheckInRegister",
+                            "RE/SubmitRegistration",
+                            "RE/CompleteRegistration"
+                        }
+
+                        for _, eventName in ipairs(remoteEvents) do
+                            local event = ReplicatedStorage.Util.Net:FindFirstChild(eventName)
+                            if event and event:IsA("RemoteEvent") then
+                                -- Tenta chamar o evento
+                                firesignal(event.OnClientEvent)
+                                pcRegistroSucesso = true
+                                task.wait(0.3)
+                                break
+                            end
+                        end
+                    end)
+                end
+
+                -- Método 4: Procura botão/clickable dentro do computer
+                if not pcRegistroSucesso then
+                    pcall(function()
+                        for _, child in ipairs(computer:GetDescendants()) do
+                            if child:IsA("TextButton") or child:IsA("ImageButton") then
+                                local clickSound = computer:FindFirstChild("Click") or computer:FindFirstChild("ClickSound")
+                                firesignal(child.MouseButton1Click)
+                                pcRegistroSucesso = true
+                                task.wait(0.2)
+                                break
+                            end
+
+                            if child:IsA("ClickDetector") then
+                                ClickButton(child.Parent)
+                                pcRegistroSucesso = true
+                                task.wait(0.2)
+                                break
+                            end
+                        end
+                    end)
+                end
+
+                -- Método 5: Interação via ProximityPrompt em descendentes
+                if not pcRegistroSucesso then
+                    for _, desc in ipairs(computer:GetDescendants()) do
+                        if desc:IsA("ProximityPrompt") and desc.Enabled then
+                            local part = FindBasePartInObject(desc.Parent)
+                            if part then
+                                SafeTeleport(part.Position + Vector3.new(0, 1, 1))
+                                FirePromptDirect(desc)
+                                pcRegistroSucesso = true
+                                task.wait(0.3)
+                                break
+                            end
+                        end
+                    end
+                end
             end
+        end
+
+        -- Fallback: procura em todo o checkIn
+        if not pcRegistroSucesso then
+            for _, desc in ipairs(checkIn:GetDescendants()) do
+                if desc:IsA("ProximityPrompt") and desc.Enabled then
+                    local actionText = string.lower(desc.ActionText or "")
+                    if string.find(actionText, "register") or string.find(actionText, "pc") or string.find(actionText, "computer") then
+                        local part = FindBasePartInObject(desc.Parent)
+                        if part then
+                            SafeTeleport(part.Position + Vector3.new(0, 1, 1))
+                            FirePromptDirect(desc)
+                            pcRegistroSucesso = true
+                            task.wait(0.3)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Espera entre tentativas
+        if not pcRegistroSucesso and tentativaPC < maxTentativasPC then
+            task.wait(0.5)
         end
     end
 
