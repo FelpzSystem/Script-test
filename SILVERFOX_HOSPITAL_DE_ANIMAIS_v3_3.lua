@@ -26,6 +26,8 @@ if not _G.HospitalConfig then
         AutoRoom7 = false,
         AutoRoom8 = false,
         AutoSecretaria = false,
+        AutoDoorClose = false,
+        AutoAnomaly = false,
         NoClip = false,
         WalkSpeed = 16,
         JumpPower = 50,
@@ -1015,22 +1017,49 @@ end)
 -- me diga o nome exato (ou o Attribute usado) que eu ajusto a lista.
 -- ==========================================
 local NPCHighlights = {}
-local ANOMALY_KEYWORDS = { "anomaly", "anomalia", "hollow", "ghost", "shadow", "impostor", "imposter", "fake" }
+local ANOMALY_KEYWORDS = {
+    "anomaly", "anomalia", "anomalous", "hollow", "ghost", "shadow",
+    "impostor", "imposter", "fake", "visitor", "visitante",
+    "intruder", "intruso", "threat", "ameaça"
+}
 
 local HIGHLIGHT_PATIENT_COLOR = Color3.fromRGB(40, 255, 90)   -- verde
 local HIGHLIGHT_ANOMALY_COLOR = Color3.fromRGB(255, 40, 40)   -- vermelho
 
+-- Detecção corrigida: cheira Attributes (IsAnomaly, Type, Role), nome do
+-- Model e nomes das partes internas (Descendants), pra pegar casos em que
+-- o jogo não marca o Model raiz mas sim uma sub-part/sub-model.
 local function IsAnomalyNPC(npc)
+    if not npc then return false end
+
     local okAttr, isAnomalyAttr = pcall(function() return npc:GetAttribute("IsAnomaly") end)
     if okAttr and isAnomalyAttr == true then return true end
 
     local okType, typeAttr = pcall(function() return npc:GetAttribute("Type") end)
     if okType and typeAttr and string.find(string.lower(tostring(typeAttr)), "anomal") then return true end
 
+    local okRole, roleAttr = pcall(function() return npc:GetAttribute("Role") end)
+    if okRole and roleAttr then
+        local roleStr = string.lower(tostring(roleAttr))
+        if string.find(roleStr, "anomal") or string.find(roleStr, "threat") or string.find(roleStr, "intruder") then
+            return true
+        end
+    end
+
     local lname = string.lower(npc.Name)
     for _, kw in ipairs(ANOMALY_KEYWORDS) do
         if string.find(lname, kw) then return true end
     end
+
+    for _, desc in ipairs(npc:GetDescendants()) do
+        if desc:IsA("Model") or desc:IsA("BasePart") then
+            local dname = string.lower(desc.Name)
+            for _, kw in ipairs(ANOMALY_KEYWORDS) do
+                if string.find(dname, kw) then return true end
+            end
+        end
+    end
+
     return false
 end
 
@@ -1085,6 +1114,133 @@ task.spawn(function()
             ClearAllHighlights()
         end
         task.wait(0.5)
+    end
+end)
+
+-- ==========================================
+-- AUTO DOOR CLOSING (fecha portas automaticamente)
+-- ==========================================
+
+local function GetAllDoors()
+    local doors = {}
+    local doorsFolder = Workspace:FindFirstChild("Doors")
+    if doorsFolder then
+        for _, door in ipairs(doorsFolder:GetChildren()) do
+            if door:IsA("Model") then
+                table.insert(doors, door)
+            end
+        end
+    end
+    return doors
+end
+
+local function CloseDoorFast(door)
+    if not door then return false end
+
+    local handle = door:FindFirstChild("Handle", true)
+    if not handle then
+        for _, child in ipairs(door:GetDescendants()) do
+            if child:IsA("BasePart") and (child.Name == "Handle" or child.Name == "Puerta") then
+                handle = child
+                break
+            end
+        end
+    end
+    if not handle then return false end
+
+    local clickDet = handle:FindFirstChildOfClass("ClickDetector")
+    if clickDet then
+        ClickButton(handle)
+        return true
+    end
+
+    local proximityPrompt = handle:FindFirstChildOfClass("ProximityPrompt")
+    if proximityPrompt and proximityPrompt.Enabled then
+        LookAtPosition(handle.Position)
+        FirePromptDirect(proximityPrompt)
+        return true
+    end
+
+    return false
+end
+
+task.spawn(function()
+    while true do
+        RunService.Heartbeat:Wait()
+        if Config.AutoDoorClose then
+            local doors = GetAllDoors()
+            for _, door in ipairs(doors) do
+                if door and door.Parent then
+                    CloseDoorFast(door)
+                end
+            end
+            task.wait(0.3)
+        end
+    end
+end)
+
+-- ==========================================
+-- AUTO ANOMALY (encontra e trata anomalias automaticamente)
+-- ==========================================
+
+local function GetAnomalyNPC()
+    local npcsFolder = Workspace:FindFirstChild("NPCs")
+    if not npcsFolder then return nil end
+
+    local refPart = GetRootPart()
+    if not refPart then return nil end
+
+    local bestModel, bestPart, bestDist = nil, nil, math.huge
+    for _, npc in ipairs(npcsFolder:GetChildren()) do
+        if npc:IsA("Model") and IsAnomalyNPC(npc) then
+            local part = FindBasePartInObject(npc)
+            if part then
+                local hasEnabledPrompt = false
+                for _, desc in ipairs(npc:GetDescendants()) do
+                    if desc:IsA("ProximityPrompt") and desc.Enabled then
+                        hasEnabledPrompt = true
+                        break
+                    end
+                end
+
+                if hasEnabledPrompt then
+                    local dist = (part.Position - refPart.Position).Magnitude
+                    if dist < bestDist then
+                        bestModel, bestPart, bestDist = npc, part, dist
+                    end
+                end
+            end
+        end
+    end
+
+    return bestModel, bestPart
+end
+
+local function ExecuteAnomalyFast()
+    local anomaly, anomalyPart = GetAnomalyNPC()
+    if not anomaly or not anomalyPart then return false end
+
+    SafeTeleport(GetApproachPosition(anomalyPart.Position, 2))
+    task.wait(0.2)
+    LookAtPosition(anomalyPart.Position)
+
+    for _, desc in ipairs(anomaly:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled then
+            print("💀 Auto Anomaly: interagindo com " .. anomaly.Name)
+            return FirePromptDirect(desc)
+        end
+    end
+
+    return false
+end
+
+task.spawn(function()
+    while true do
+        RunService.Heartbeat:Wait()
+        if Config.AutoAnomaly then
+            ExecuteAnomalyFast()
+            task.wait(1)
+        end
     end
 end)
 
@@ -1161,7 +1317,9 @@ local function DoCheckInStep(stepName, label, waitAfter)
             if part then
                 print("📋 Secretária: " .. label .. " (tentativa " .. attempt .. ")...")
                 SafeTeleport(GetApproachPosition(part.Position, 3))
-                local ok = FirePromptWithCamera(prompt, part.Position)
+                task.wait(0.3) -- aguarda o teleporte assentar antes de interagir (corrige falha silenciosa)
+                LookAtPosition(part.Position)
+                local ok = FirePromptDirect(prompt)
                 task.wait(waitAfter)
                 if ok then return true end
             end
@@ -1224,15 +1382,16 @@ end
 -- depois) e, no final, pra "entregar o crachá". Por isso usamos uma função
 -- genérica em vez de procurar um objeto fixo chamado "Form".
 local function DoPatientPromptStep(label, waitAfter, acceptCheck)
-    waitAfter = waitAfter or 0.6
+    waitAfter = waitAfter or 0.8
     for attempt = 1, STEP_RETRIES do
         if not Config.AutoSecretaria then return false end
 
         local npcModel, patientPart = GetWaitingPatient()
         if not npcModel or not patientPart then
-            print("⚠️ Secretária: procurando paciente pra '" .. label .. "'... (tentativa " .. attempt .. ")")
+            print("⏳ Secretária: procurando paciente pra '" .. label .. "'... (tentativa " .. attempt .. ")")
         else
             SafeTeleport(GetApproachPosition(patientPart.Position, 3))
+            task.wait(0.3) -- aguarda o teleporte assentar (corrige prompt não disparando)
             LookAtPosition(patientPart.Position)
             task.wait(0.2)
 
@@ -1246,7 +1405,7 @@ local function DoPatientPromptStep(label, waitAfter, acceptCheck)
 
             if prompt then
                 print("📋 Secretária: " .. label .. " (" .. npcModel.Name .. ") tentativa " .. attempt .. "...")
-                local ok = FirePromptWithCamera(prompt, patientPart.Position)
+                local ok = FirePromptDirect(prompt)
                 task.wait(waitAfter)
                 if ok and (not acceptCheck or acceptCheck()) then return true end
             else
@@ -1284,7 +1443,9 @@ local function PickUpPrintedBadge()
             if part then
                 print("🪪 Secretária: pegando crachá (" .. prompt.Parent.Name .. ") tentativa " .. attempt .. "...")
                 SafeTeleport(GetApproachPosition(part.Position, 3))
-                FirePromptWithCamera(prompt, part.Position)
+                task.wait(0.3) -- aguarda o teleporte assentar antes de interagir
+                LookAtPosition(part.Position)
+                FirePromptDirect(prompt)
                 task.wait(0.4)
             end
         end
@@ -1325,29 +1486,34 @@ local function AutoSecretariaSequence()
     -- 1) Carimbar o formulário: interage com o prompt do PRÓPRIO paciente
     -- (é essa etapa que HABILITA a Camera.PP depois — por isso a foto não
     -- estava funcionando quando esse passo era pulado)
-    if not DoPatientPromptStep("Carimbando Formulário") then return end
+    if not DoPatientPromptStep("Carimbando Formulário", 0.8) then return end
     if not Config.AutoSecretaria then return end
+    task.wait(0.5)
 
     -- 2) Tirar a foto do paciente (Camera.PP)
-    if not DoCheckInStep("Camera", "Tirando Foto") then return end
+    if not DoCheckInStep("Camera", "Tirando Foto", 0.8) then return end
     if not Config.AutoSecretaria then return end
+    task.wait(0.5)
 
     -- 3) Registrar no computador (Computer.PP)
-    if not DoCheckInStep("Computer", "Registrando no Computador") then return end
+    if not DoCheckInStep("Computer", "Registrando no Computador", 0.8) then return end
     if not Config.AutoSecretaria then return end
+    task.wait(0.5)
 
     -- 4) Imprimir o crachá (Printer.PP, aguarda 1.5s pra impressora terminar)
     if not DoCheckInStep("Printer", "Imprimindo Crachá", PRINTER_WAIT_TIME) then return end
     if not Config.AutoSecretaria then return end
+    task.wait(0.5)
 
     -- 5) Pegar o crachá impresso (VisitorBadgeBase / PatientBadgeBase, com validação de inventário)
     if not PickUpPrintedBadge() then return end
     if not Config.AutoSecretaria then return end
+    task.wait(0.5)
 
     -- 6) Entregar o crachá ao paciente que está esperando (prompt do próprio NPC)
-    DeliverBadgeToPatient()
-
-    print("✅ Auto Secretária: ciclo concluído!")
+    if DeliverBadgeToPatient() then
+        print("✅ Auto Secretária: ciclo concluído!")
+    end
 end
 
 task.spawn(function()
@@ -1399,9 +1565,9 @@ pcall(function()
 end)
 
 local Window = WindUI:CreateWindow({
-    Title = "🏥 Animal Hospital Hub",
+    Title = "🦊 SILVERFOX | HOSPITAL DE ANIMAIS",
     Icon = "https://files.catbox.moe/0mg5gr.jpg",
-    Author = "v3.2 | RodrigoBloxYT",
+    Author = "v3.3 | FelpzSystem",
     Theme = "Dark",
 })
 
@@ -1489,6 +1655,29 @@ MainTab:Toggle({
     Callback = function(state)
         Config.AutoSecretaria = state
         if state then print("🗂️ Auto Secretária ativado!") end
+    end,
+})
+
+MainTab:Paragraph({
+    Title = "🚪 Portas & Anomalias",
+    Desc = "Fecha portas automaticamente e trata anomalias sozinho",
+})
+
+MainTab:Toggle({
+    Title = "Auto Fechar Porta",
+    Desc = "Fecha portas próximas automaticamente (Doors)",
+    Value = Config.AutoDoorClose,
+    Callback = function(state)
+        Config.AutoDoorClose = state
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Auto Anomalia",
+    Desc = "Encontra e trata a anomalia mais próxima automaticamente",
+    Value = Config.AutoAnomaly,
+    Callback = function(state)
+        Config.AutoAnomaly = state
     end,
 })
 
@@ -1722,7 +1911,7 @@ MiscTab:Button({
 local AboutTab = Window:Tab({ Title = "Sobre", Icon = "info" })
 
 AboutTab:Paragraph({
-    Title = "🏥 Animal Hospital Hub",
+    Title = "🦊 SILVERFOX | HOSPITAL DE ANIMAIS",
     Desc = "Obrigado por confiar no nosso trabalho! ❤️\n\n"
         .. "Esse hub nasceu pra tornar sua experiência no Animal Hospital\n"
         .. "mais leve, rápida e divertida — sem perder a magia do jogo.\n\n"
@@ -1732,22 +1921,23 @@ AboutTab:Paragraph({
 
 AboutTab:Paragraph({
     Title = "✨ Versão & Créditos",
-    Desc = "Versão: v3.2\nCriador: RodrigoBloxYT\nExecutor: Delta",
+    Desc = "Versão: v3.3\nCriador: FelpzSystem\nExecutor: Delta",
 })
 
 AboutTab:Paragraph({
-    Title = "⚡ Novidades v3.2",
-    Desc = "• Novo: Manter Sanidade Cheia — já vem ATIVADO (aba Principal)\n"
-        .. "• Corrigido: Auto Secretária não carimbava o formulário nem\n"
-        .. "   tirava a foto (faltava a etapa de interagir com o próprio\n"
-        .. "   paciente antes — é isso que habilita a Camera.PP)\n"
-        .. "• Novo: Remover Fog (aba Visual)\n"
-        .. "• Novo: FPS Boost (aba Visual)\n"
-        .. "• Novo: Força do Pulo / Jump Power (aba Utilidades)\n"
-        .. "• Novo: Fly / Voo com controle por câmera (aba Utilidades)\n"
-        .. "• Novo: Highlights — verde no paciente, vermelho na anomalia\n"
-        .. "   (aba Visual)\n"
-        .. "• Abas reorganizadas: Principal, Utilidades, Visual, Misc, Sobre",
+    Title = "⚡ Novidades v3.3",
+    Desc = "• Corrigido: Auto Secretária inteira (formulário, foto, computador,\n"
+        .. "   impressão e retirada de crachá) — faltava aguardar o teleporte\n"
+        .. "   assentar e olhar pro alvo antes de interagir, o que fazia os\n"
+        .. "   prompts não disparar em quase todas as etapas\n"
+        .. "• Novo: Auto Fechar Porta (aba Principal)\n"
+        .. "• Novo: Auto Anomalia — encontra e trata sozinho (aba Principal)\n"
+        .. "• Melhorado: Detecção de anomalia no ESP/Highlights (mais\n"
+        .. "   palavras-chave e checagem de Attributes Role/Type)\n"
+        .. "• Mantido: Manter Sanidade Cheia — já vem ATIVADO (aba Principal)\n"
+        .. "• Mantido: Remover Fog, FPS Boost (aba Visual)\n"
+        .. "• Mantido: Força do Pulo / Jump Power, Fly / Voo (aba Utilidades)\n"
+        .. "• Abas: Principal, Utilidades, Visual, Misc, Sobre",
 })
 
 AboutTab:Paragraph({
@@ -1757,4 +1947,4 @@ AboutTab:Paragraph({
         .. "🔗 Link disponível na aba Misc",
 })
 
-print("🚀 [Hospital Hub v3.2] Interface WindUI carregada!")
+print("🚀 [SILVERFOX | HOSPITAL DE ANIMAIS v3.3] Interface WindUI carregada!")
