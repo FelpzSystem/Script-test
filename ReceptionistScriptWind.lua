@@ -1,22 +1,12 @@
---[[
-    ================================================================
-    RECEPTIONIST SCRIPT V3 - ANIMAL HOSPITAL
-    ================================================================
-    Script de recepcionista com Wind UI
-    Biblioteca: Wind UI Library
-    Highlights: Visitor (Vermelho), Paciente (Verde), Anomalias
+local ok, WindUI = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+end)
 
-    ================================================================
-]]
+if not ok or not WindUI then
+    warn("Falha ao carregar WindUI: " .. tostring(WindUI))
+    return
+end
 
--- ================================================================
--- CARREGAR WIND UI LIBRARY
--- ================================================================
-local Wind = loadstring(game:HttpGet("https://github.com/Johnnyysen/WindUI/raw/main/Source.lua"))()
-
--- ================================================================
--- SERVIÇOS
--- ================================================================
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
@@ -24,14 +14,10 @@ local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 local TweenService = game:GetService("TweenService")
 
--- Jogador local
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Camera = Workspace.CurrentCamera
 
--- ================================================================
--- CORES DO SISTEMA
--- ================================================================
 local Colors = {
     Primary = Color3.fromRGB(45, 45, 55),
     Secondary = Color3.fromRGB(60, 60, 70),
@@ -47,9 +33,6 @@ local Colors = {
     HighlightAnomalia = Color3.fromRGB(255, 100, 200)
 }
 
--- ================================================================
--- MÓDULO: HIGHLIGHTS
--- ================================================================
 local HighlightSystem = {
     ActiveHighlights = {},
     Settings = {
@@ -152,8 +135,8 @@ function HighlightSystem:ScanForNPCs()
 
     if ReplicatedStorage:FindFirstChild("NPCs") then
         local npcs = ReplicatedStorage.NPCs
-        scanFolder(npcs.Visitors, found.Visitors)
-        scanFolder(npcs.Anomalies, found.Anomalias)
+        scanFolder(npcs:FindFirstChild("Visitors"), found.Visitors)
+        scanFolder(npcs:FindFirstChild("Anomalies"), found.Anomalias)
     end
 
     if Workspace:FindFirstChild("NPCs") then
@@ -187,26 +170,25 @@ function HighlightSystem:HighlightAll(options)
     return count
 end
 
--- ================================================================
--- MÓDULO: INTERFACE (UI)
--- ================================================================
 local UI = {}
 
-function UI:Notify(title, content, duration, type)
+function UI:Notify(title, content, duration, kind)
     duration = duration or 3
-    type = type or "info"
+    kind = kind or "info"
 
     local color = Colors.Accent
-    if type == "success" then color = Colors.Success
-    elseif type == "warning" then color = Colors.Warning
-    elseif type == "error" then color = Colors.Danger
+    if kind == "success" then
+        color = Colors.Success
+    elseif kind == "warning" then
+        color = Colors.Warning
+    elseif kind == "error" then
+        color = Colors.Danger
     end
 
-    Wind:Notify({
+    WindUI:Notify({
         Title = title,
         Content = content,
         Duration = duration,
-        Icon = nil,
         Color = color
     })
 end
@@ -325,9 +307,6 @@ function UI:Shake(intensity, duration)
     end)
 end
 
--- ================================================================
--- MÓDULO: FUNÇÕES PRINCIPAIS (principal)
--- ================================================================
 local PrincipalModule = {}
 
 PrincipalModule.State = {
@@ -408,7 +387,7 @@ end
 function PrincipalModule:RegisterPatient(patientData)
     local data = patientData or {}
 
-    if not data.name then
+    if not data.name or data.name == "" then
         data.name = "Paciente-" .. math.random(1000, 9999)
     end
 
@@ -463,14 +442,11 @@ function PrincipalModule:GetStatus()
     }
 end
 
--- ================================================================
--- MÓDULO: UTILIDADES (utilidades)
--- ================================================================
 local UtilidadesModule = {}
 
 function UtilidadesModule:FindElement(path)
     local parts = string.split(path, ".")
-    local current = workspace
+    local current = Workspace
 
     for i, part in ipairs(parts) do
         if i == 1 and part:lower() == "workspace" then
@@ -494,10 +470,13 @@ function UtilidadesModule:Interact(element)
     if element:IsA("ClickDetector") then
         return { success = true, message = "Interagiu com " .. element.Parent.Name }
     elseif element:IsA("ProximityPrompt") then
-        fireproximityprompt(element)
-        return { success = true, message = "Usou prompt em " .. element.Parent.Name }
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(element)
+            return { success = true, message = "Usou prompt em " .. element.Parent.Name }
+        end
+        return { success = false, message = "fireproximityprompt indisponivel neste executor" }
     else
-        return { success = true, message = "Interactuou com " .. element.Name }
+        return { success = true, message = "Interagiu com " .. element.Name }
     end
 end
 
@@ -526,9 +505,6 @@ function UtilidadesModule:ElementExists(path)
     return success and element ~= nil
 end
 
--- ================================================================
--- MÓDULO: VISUAL (visual)
--- ================================================================
 local VisualModule = {}
 
 function VisualModule:Flash(duration, color)
@@ -566,8 +542,8 @@ function VisualModule:Highlight(element, color, duration)
     return { success = true, message = "Elemento destacado" }
 end
 
-function VisualModule:Notification(title, message, type)
-    UI:Notify(title, message, 3, type or "info")
+function VisualModule:Notification(title, message, kind)
+    UI:Notify(title, message, 3, kind or "info")
     return { success = true }
 end
 
@@ -576,9 +552,6 @@ function VisualModule:Progress(text, duration)
     return { success = true }
 end
 
--- ================================================================
--- MÓDULO: PLAYER (player)
--- ================================================================
 local PlayerModule = {}
 
 function PlayerModule:GetInfo()
@@ -629,9 +602,6 @@ function PlayerModule:SetWalkSpeed(speed)
     return { success = false, message = "Humanoid nao encontrado" }
 end
 
--- ================================================================
--- MÓDULO: MISC (misc)
--- ================================================================
 local MiscModule = {}
 
 function MiscModule:UseComputer(action)
@@ -645,21 +615,18 @@ function MiscModule:UseComputer(action)
         end
         UtilidadesModule:Wait(1)
         return { success = true, message = "Computador acessado", action = "access" }
-
     elseif action == "type" then
         if PrincipalModule.Settings.ShowProgress then
             UI:ProgressBar("Digitando...", 0.5)
         end
         UtilidadesModule:Wait(0.5)
         return { success = true, message = "Texto digitado", action = "type" }
-
     elseif action == "submit" then
         if PrincipalModule.Settings.ShowProgress then
             UI:ProgressBar("Enviando...", 0.8)
         end
         UtilidadesModule:Wait(0.8)
         return { success = true, message = "Enviado", action = "submit" }
-
     else
         return { success = false, message = "Acao desconhecida: " .. tostring(action) }
     end
@@ -678,14 +645,12 @@ function MiscModule:UsePrinter(action)
         UtilidadesModule:Wait(2)
         PrincipalModule.State.DailyStats.totalPrints = PrincipalModule.State.DailyStats.totalPrints + 1
         return { success = true, message = "Documento impresso", action = "print" }
-
     elseif action == "pickup" then
         if PrincipalModule.Settings.ShowProgress then
             UI:ProgressBar("Pegando documento...", 0.5)
         end
         UtilidadesModule:Wait(0.5)
         return { success = true, message = "Documento pego", action = "pickup" }
-
     else
         return { success = false, message = "Acao desconhecida: " .. tostring(action) }
     end
@@ -718,13 +683,13 @@ function MiscModule:AccessFiles(drawer)
 
     local drawerObj = cabinet:FindFirstChild("Drawer" .. tostring(drawer))
     if not drawerObj then
-        return { success = false, message = "Gaveta " .. drawer .. " nao encontrada" }
+        return { success = false, message = "Gaveta " .. tostring(drawer) .. " nao encontrada" }
     end
 
     UI:ProgressBar("Abrindo gaveta...", 0.5)
     UtilidadesModule:Wait(0.5)
 
-    return { success = true, message = "Gaveta " .. drawer .. " aberta", drawer = drawer }
+    return { success = true, message = "Gaveta " .. tostring(drawer) .. " aberta", drawer = drawer }
 end
 
 function MiscModule:TakePhoto()
@@ -761,9 +726,6 @@ function MiscModule:FillForm(formType)
     }
 end
 
--- ================================================================
--- MÓDULO: SOBRE (sobre)
--- ================================================================
 local SobreModule = {}
 
 function SobreModule:Info()
@@ -771,7 +733,7 @@ function SobreModule:Info()
         nome = "Receptionist Script V3",
         versao = "3.0.0",
         autor = "Admin",
-        descricao = "Script completo para receptionist do Animal Hospital com Wind UI",
+        descricao = "Script completo para receptionist do Animal Hospital com WindUI",
         categorias = {
             "principal - Funcoes principais de receptionist",
             "utilidades - Funcoes utilitarias",
@@ -788,7 +750,7 @@ function SobreModule:Ajuda()
     return [[
         COMANDOS PRINCIPAIS:
 
-        1. SecretaryTask():
+        1. SecretaryTask:Start():
            - Executa TODAS as tarefas da secretary automaticamente
            - Sequencia: Formulario -> Foto -> Computador -> Imprimir -> Pegar -> Entregar
 
@@ -825,9 +787,6 @@ function SobreModule:Comandos()
     }
 end
 
--- ================================================================
--- FUNÇÃO ÚNICA: TAREFA COMPLETA DA SECRETARY
--- ================================================================
 local SecretaryTask = {}
 
 function SecretaryTask:Execute(options)
@@ -862,7 +821,6 @@ function SecretaryTask:Execute(options)
         end
     end
 
-    -- ETAPA 1: FORMULARIO
     Log("Preparando formulario...")
     if showProgress then UI:ProgressBar("Pegando formulario...", 1) end
     UtilidadesModule:Wait(1)
@@ -871,7 +829,6 @@ function SecretaryTask:Execute(options)
     taskStatus.form = true
     Log("Formulario preenchido: " .. patient.name)
 
-    -- ETAPA 2: FOTO
     Log("Tirando foto...")
     if showProgress then UI:ProgressBar("Posicionando para foto...", 0.5) end
     UtilidadesModule:Wait(0.5)
@@ -881,7 +838,6 @@ function SecretaryTask:Execute(options)
     taskStatus.photo = true
     Log("Foto tirada: " .. patient.photoId)
 
-    -- ETAPA 3: COMPUTADOR
     Log("Usando computador...")
     if showProgress then UI:ProgressBar("Acessando computador...", 1) end
     UtilidadesModule:Wait(1)
@@ -896,7 +852,6 @@ function SecretaryTask:Execute(options)
     taskStatus.computer = true
     Log("Dados registrados no computador")
 
-    -- ETAPA 4: IMPRIMIR
     Log("Imprimindo documentos...")
     if showProgress then UI:ProgressBar("Enviando para impressora...", 1) end
     UtilidadesModule:Wait(1)
@@ -906,7 +861,6 @@ function SecretaryTask:Execute(options)
     taskStatus.print = true
     Log("Documento impresso: " .. patient.printId)
 
-    -- ETAPA 5: PEGAR DOCUMENTO
     Log("Pegando documento impresso...")
     if showProgress then UI:ProgressBar("Pegando documento...", 0.8) end
     UtilidadesModule:Wait(0.8)
@@ -915,7 +869,6 @@ function SecretaryTask:Execute(options)
     taskStatus.pickup = true
     Log("Documento pego da impressora")
 
-    -- ETAPA 6: ENTREGAR
     Log("Entregando ao paciente...")
     if showProgress then UI:ProgressBar("Entregando documentos...", 1.5) end
     UtilidadesModule:Wait(1.5)
@@ -926,7 +879,6 @@ function SecretaryTask:Execute(options)
     taskStatus.deliver = true
     Log("Documentos entregues a " .. patient.name)
 
-    -- RESULTADO
     PrincipalModule.State.CompletedTasks = PrincipalModule.State.CompletedTasks + 1
 
     local finalResult = {
@@ -950,28 +902,20 @@ function SecretaryTask:Start(patientData)
     return SecretaryTask:Execute({ patient = patientData, showProgress = true })
 end
 
--- ================================================================
--- CRIAÇÃO DA UI COM WIND LIBRARY
--- ================================================================
-local Window = Wind:Create({
-    Name = "Receptionist Script V3",
-    ToggleKey = Enum.KeyCode.RightBracket,
-    HideToggleName = true
+local Window = WindUI:CreateWindow({
+    Title = "Receptionist Script V3",
+    Icon = "hospital",
+    Folder = "ReceptionistScriptV3",
+    Theme = "Dark"
 })
 
--- ================================================================
--- ABA: PRINCIPAL
--- ================================================================
-local PrincipalTab = Window:Tab({
-    Name = "Principal",
-    Icon = "rbxassetid://4483345998"
-})
+local PrincipalTab = Window:Tab({ Title = "Principal", Icon = "clipboard-list" })
 
-PrincipalTab:Section("Registro de Paciente")
+PrincipalTab:Section({ Title = "Registro de Paciente" })
 
 PrincipalTab:Input({
-    Name = "Nome do Paciente",
-    Default = "",
+    Title = "Nome do Paciente",
+    Value = "",
     Placeholder = "Digite o nome...",
     Callback = function(value)
         _G.patientName = value
@@ -979,8 +923,8 @@ PrincipalTab:Input({
 })
 
 PrincipalTab:Input({
-    Name = "Especie",
-    Default = "",
+    Title = "Especie",
+    Value = "",
     Placeholder = "Digite a especie...",
     Callback = function(value)
         _G.patientSpecies = value
@@ -988,8 +932,8 @@ PrincipalTab:Input({
 })
 
 PrincipalTab:Input({
-    Name = "Dono",
-    Default = "",
+    Title = "Dono",
+    Value = "",
     Placeholder = "Nome do dono...",
     Callback = function(value)
         _G.patientOwner = value
@@ -997,25 +941,25 @@ PrincipalTab:Input({
 })
 
 PrincipalTab:Dropdown({
-    Name = "Urgencia",
-    Options = {"Normal", "Urgente", "Emergencia"},
-    Default = 1,
+    Title = "Urgencia",
+    Values = { "Normal", "Urgente", "Emergencia" },
+    Value = 1,
     Callback = function(value)
         _G.patientUrgency = value
     end
 })
 
 PrincipalTab:Button({
-    Name = "Registrar Paciente",
+    Title = "Registrar Paciente",
     Callback = function()
         local data = {
-            name = _G.patientName or "Paciente-" .. math.random(1000, 9999),
+            name = (_G.patientName and _G.patientName ~= "" and _G.patientName) or ("Paciente-" .. math.random(1000, 9999)),
             species = _G.patientSpecies or "Animal",
             owner = _G.patientOwner or "Dono",
             urgency = _G.patientUrgency or "Normal"
         }
         local result = PrincipalModule:RegisterPatient(data)
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Registrado",
             Content = result.message,
             Duration = 3,
@@ -1024,10 +968,10 @@ PrincipalTab:Button({
     end
 })
 
-PrincipalTab:Section("Tarefas")
+PrincipalTab:Section({ Title = "Tarefas" })
 
 PrincipalTab:Button({
-    Name = "Executar Tarefa Completa",
+    Title = "Executar Tarefa Completa",
     Callback = function()
         local data = {
             name = _G.patientName,
@@ -1040,13 +984,13 @@ PrincipalTab:Button({
 })
 
 PrincipalTab:Button({
-    Name = "Ver Status",
+    Title = "Ver Status",
     Callback = function()
         local status = PrincipalModule:GetStatus()
         local msg = "Paciente: " .. (status.currentPatient or "Nenhum") .. "\n"
         msg = msg .. "Tarefas Completas: " .. status.completedTasks .. "\n"
         msg = msg .. "Pacientes Hoje: " .. status.stats.totalPatients
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Status",
             Content = msg,
             Duration = 5,
@@ -1056,10 +1000,10 @@ PrincipalTab:Button({
 })
 
 PrincipalTab:Button({
-    Name = "Limpar Paciente",
+    Title = "Limpar Paciente",
     Callback = function()
         PrincipalModule:ClearPatient()
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Limpo",
             Content = "Paciente removido",
             Duration = 3,
@@ -1068,106 +1012,83 @@ PrincipalTab:Button({
     end
 })
 
--- ================================================================
--- ABA: TAREFAS
--- ================================================================
-local TarefasTab = Window:Tab({
-    Name = "Tarefas",
-    Icon = "rbxassetid://4483345998"
-})
+local TarefasTab = Window:Tab({ Title = "Tarefas", Icon = "list-checks" })
 
-TarefasTab:Section("Tarefas Individuais")
+TarefasTab:Section({ Title = "Tarefas Individuais" })
 
 TarefasTab:Button({
-    Name = "Preencher Formulario",
+    Title = "Preencher Formulario",
     Callback = function()
         MiscModule:FillForm("medical")
     end
 })
 
 TarefasTab:Button({
-    Name = "Tirar Foto",
+    Title = "Tirar Foto",
     Callback = function()
         MiscModule:TakePhoto()
     end
 })
 
-TarefasTab:Section("Computador")
+TarefasTab:Section({ Title = "Computador" })
 
 TarefasTab:Dropdown({
-    Name = "Acao do Computador",
-    Options = {"access", "type", "submit"},
-    Default = 1,
+    Title = "Acao do Computador",
+    Values = { "access", "type", "submit" },
+    Value = 1,
     Callback = function(value)
         _G.computerAction = value
     end
 })
 
 TarefasTab:Button({
-    Name = "Usar Computador",
+    Title = "Usar Computador",
     Callback = function()
-        if _G.computerAction then
-            MiscModule:UseComputer(_G.computerAction)
-        else
-            MiscModule:UseComputer("access")
-        end
+        MiscModule:UseComputer(_G.computerAction or "access")
     end
 })
 
-TarefasTab:Section("Impressora")
+TarefasTab:Section({ Title = "Impressora" })
 
 TarefasTab:Dropdown({
-    Name = "Acao da Impressora",
-    Options = {"print", "pickup"},
-    Default = 1,
+    Title = "Acao da Impressora",
+    Values = { "print", "pickup" },
+    Value = 1,
     Callback = function(value)
         _G.printerAction = value
     end
 })
 
 TarefasTab:Button({
-    Name = "Usar Impressora",
+    Title = "Usar Impressora",
     Callback = function()
-        if _G.printerAction then
-            MiscModule:UsePrinter(_G.printerAction)
-        else
-            MiscModule:UsePrinter("print")
-        end
+        MiscModule:UsePrinter(_G.printerAction or "print")
     end
 })
 
-TarefasTab:Section("Cameras")
+TarefasTab:Section({ Title = "Cameras" })
 
 TarefasTab:Button({
-    Name = "Acessar Camerasa",
+    Title = "Acessar Cameras",
     Callback = function()
         MiscModule:AccessCameras()
     end
 })
 
--- ================================================================
--- ABA: HIGHLIGHTS
--- ================================================================
-local HighlightsTab = Window:Tab({
-    Name = "Highlights",
-    Icon = "rbxassetid://4483345998"
+local HighlightsTab = Window:Tab({ Title = "Highlights", Icon = "sparkles" })
+
+HighlightsTab:Section({ Title = "Sistema de Highlights" })
+
+HighlightsTab:Paragraph({
+    Title = "Legenda de Cores",
+    Desc = "Visitor = Vermelho\nPaciente = Verde\nAnomalia = Rosa"
 })
 
-HighlightsTab:Section("Sistema de Highlights")
-
-HighlightsTab:Paragraph("Info",
-    "Visitor = Vermelho\n" ..
-    "Paciente = Verde\n" ..
-    "Anomalia = Rosa\n\n" ..
-    "Use os botoes abaixo para\n" ..
-    "destacar elementos no jogo."
-)
-
-HighlightsTab:Section("Highlights Rapidos")
+HighlightsTab:Section({ Title = "Highlights Rapidos" })
 
 HighlightsTab:Toggle({
-    Name = "Highlight Visitors (Vermelho)",
-    Default = false,
+    Title = "Highlight Visitors (Vermelho)",
+    Value = false,
     Callback = function(state)
         _G.highlightVisitors = state
         if state then
@@ -1179,8 +1100,8 @@ HighlightsTab:Toggle({
 })
 
 HighlightsTab:Toggle({
-    Name = "Highlight Anomalias (Rosa)",
-    Default = false,
+    Title = "Highlight Anomalias (Rosa)",
+    Value = false,
     Callback = function(state)
         _G.highlightAnomalias = state
         if state then
@@ -1191,13 +1112,13 @@ HighlightsTab:Toggle({
     end
 })
 
-HighlightsTab:Section("Acoes")
+HighlightsTab:Section({ Title = "Acoes" })
 
 HighlightsTab:Button({
-    Name = "Highlight Todos",
+    Title = "Highlight Todos",
     Callback = function()
         local count = HighlightSystem:HighlightAll({ visitors = true, anomalias = true })
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Highlights",
             Content = "Visitors: " .. count.visitors .. "\nAnomalias: " .. count.anomalias,
             Duration = 3,
@@ -1207,10 +1128,10 @@ HighlightsTab:Button({
 })
 
 HighlightsTab:Button({
-    Name = "Limpar Todos Highlights",
+    Title = "Limpar Todos Highlights",
     Callback = function()
         HighlightSystem:ClearAll()
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Limpo",
             Content = "Todos os highlights removidos",
             Duration = 3,
@@ -1219,32 +1140,24 @@ HighlightsTab:Button({
     end
 })
 
-HighlightsTab:Section("Configuracao")
+HighlightsTab:Section({ Title = "Configuracao" })
 
 HighlightsTab:Slider({
-    Name = "Duracao do Highlight",
-    Min = 1,
-    Max = 30,
-    Default = 5,
+    Title = "Duracao do Highlight",
+    Value = { Min = 1, Max = 30, Default = 5 },
     Callback = function(value)
         PrincipalModule.Settings.HighlightDuration = value
         HighlightSystem.Settings.Duration = value
     end
 })
 
--- ================================================================
--- ABA: UTILIDADES
--- ================================================================
-local UtilidadesTab = Window:Tab({
-    Name = "Utilidades",
-    Icon = "rbxassetid://4483345998"
-})
+local UtilidadesTab = Window:Tab({ Title = "Utilidades", Icon = "wrench" })
 
-UtilidadesTab:Section("Localizacao")
+UtilidadesTab:Section({ Title = "Localizacao" })
 
 UtilidadesTab:Input({
-    Name = "Posicao X",
-    Default = "0",
+    Title = "Posicao X",
+    Value = "0",
     Placeholder = "X",
     Callback = function(value)
         _G.tpX = tonumber(value) or 0
@@ -1252,8 +1165,8 @@ UtilidadesTab:Input({
 })
 
 UtilidadesTab:Input({
-    Name = "Posicao Y",
-    Default = "0",
+    Title = "Posicao Y",
+    Value = "0",
     Placeholder = "Y",
     Callback = function(value)
         _G.tpY = tonumber(value) or 0
@@ -1261,8 +1174,8 @@ UtilidadesTab:Input({
 })
 
 UtilidadesTab:Input({
-    Name = "Posicao Z",
-    Default = "0",
+    Title = "Posicao Z",
+    Value = "0",
     Placeholder = "Z",
     Callback = function(value)
         _G.tpZ = tonumber(value) or 0
@@ -1270,108 +1183,93 @@ UtilidadesTab:Input({
 })
 
 UtilidadesTab:Button({
-    Name = "Teleportar",
+    Title = "Teleportar",
     Callback = function()
         local pos = Vector3.new(_G.tpX or 0, _G.tpY or 0, _G.tpZ or 0)
         PlayerModule:Teleport(pos)
     end
 })
 
-UtilidadesTab:Section("Velocidade")
+UtilidadesTab:Section({ Title = "Velocidade" })
 
 UtilidadesTab:Slider({
-    Name = "WalkSpeed",
-    Min = 16,
-    Max = 100,
-    Default = 16,
+    Title = "WalkSpeed",
+    Value = { Min = 16, Max = 100, Default = 16 },
     Callback = function(value)
         PlayerModule:SetWalkSpeed(value)
     end
 })
 
--- ================================================================
--- ABA: VISUAL
--- ================================================================
-local VisualTab = Window:Tab({
-    Name = "Visual",
-    Icon = "rbxassetid://4483345998"
-})
+local VisualTab = Window:Tab({ Title = "Visual", Icon = "eye" })
 
-VisualTab:Section("Efeitos Visuais")
+VisualTab:Section({ Title = "Efeitos Visuais" })
 
 VisualTab:Button({
-    Name = "Flash",
+    Title = "Flash",
     Callback = function()
         VisualModule:Flash()
     end
 })
 
 VisualTab:Button({
-    Name = "Shake",
+    Title = "Shake",
     Callback = function()
         VisualModule:Shake()
     end
 })
 
-VisualTab:Section("Configuracoes")
+VisualTab:Section({ Title = "Configuracoes" })
 
 VisualTab:Toggle({
-    Name = "Mostrar Notificacoes",
-    Default = true,
+    Title = "Mostrar Notificacoes",
+    Value = true,
     Callback = function(value)
         PrincipalModule.Settings.ShowNotifications = value
     end
 })
 
 VisualTab:Toggle({
-    Name = "Mostrar Progresso",
-    Default = true,
+    Title = "Mostrar Progresso",
+    Value = true,
     Callback = function(value)
         PrincipalModule.Settings.ShowProgress = value
     end
 })
 
 VisualTab:Toggle({
-    Name = "Debug Mode",
-    Default = false,
+    Title = "Debug Mode",
+    Value = false,
     Callback = function(value)
         PrincipalModule.Settings.DebugMode = value
     end
 })
 
--- ================================================================
--- ABA: ESTATISTICAS
--- ================================================================
-local StatsTab = Window:Tab({
-    Name = "Estatisticas",
-    Icon = "rbxassetid://4483345998"
+local StatsTab = Window:Tab({ Title = "Estatisticas", Icon = "bar-chart-3" })
+
+StatsTab:Section({ Title = "Estatisticas Diarias" })
+
+local function BuildStatsText()
+    return "Pacientes: " .. PrincipalModule.State.DailyStats.totalPatients .. "\n" ..
+        "Fotos: " .. PrincipalModule.State.DailyStats.totalPhotos .. "\n" ..
+        "Formularios: " .. PrincipalModule.State.DailyStats.totalForms .. "\n" ..
+        "Impressoes: " .. PrincipalModule.State.DailyStats.totalPrints .. "\n" ..
+        "Entregas: " .. PrincipalModule.State.DailyStats.totalDeliveries .. "\n\n" ..
+        "Tarefas Completas: " .. PrincipalModule.State.CompletedTasks .. "\n" ..
+        "Tarefas Falhas: " .. PrincipalModule.State.FailedTasks
+end
+
+local StatsParagraph = StatsTab:Paragraph({
+    Title = "Stats",
+    Desc = BuildStatsText()
 })
 
-StatsTab:Section("Estatisticas Diarias")
-
-StatsTab:Paragraph("Stats",
-    "Pacientes: " .. PrincipalModule.State.DailyStats.totalPatients .. "\n" ..
-    "Fotos: " .. PrincipalModule.State.DailyStats.totalPhotos .. "\n" ..
-    "Formularios: " .. PrincipalModule.State.DailyStats.totalForms .. "\n" ..
-    "Impressoes: " .. PrincipalModule.State.DailyStats.totalPrints .. "\n" ..
-    "Entregas: " .. PrincipalModule.State.DailyStats.totalDeliveries .. "\n\n" ..
-    "Tarefas Completas: " .. PrincipalModule.State.CompletedTasks .. "\n" ..
-    "Tarefas Falhas: " .. PrincipalModule.State.FailedTasks
-)
-
 StatsTab:Button({
-    Name = "Atualizar Stats",
+    Title = "Atualizar Stats",
     Callback = function()
-        StatsTab:EditParagraph("Stats",
-            "Pacientes: " .. PrincipalModule.State.DailyStats.totalPatients .. "\n" ..
-            "Fotos: " .. PrincipalModule.State.DailyStats.totalPhotos .. "\n" ..
-            "Formularios: " .. PrincipalModule.State.DailyStats.totalForms .. "\n" ..
-            "Impressoes: " .. PrincipalModule.State.DailyStats.totalPrints .. "\n" ..
-            "Entregas: " .. PrincipalModule.State.DailyStats.totalDeliveries .. "\n\n" ..
-            "Tarefas Completas: " .. PrincipalModule.State.CompletedTasks .. "\n" ..
-            "Tarefas Falhas: " .. PrincipalModule.State.FailedTasks
-        )
-        Wind:Notify({
+        if StatsParagraph and StatsParagraph.SetDesc then
+            StatsParagraph:SetDesc(BuildStatsText())
+        end
+        WindUI:Notify({
             Title = "Atualizado",
             Content = "Estatisticas atualizadas!",
             Duration = 2,
@@ -1380,42 +1278,37 @@ StatsTab:Button({
     end
 })
 
--- ================================================================
--- ABA: SOBRE
--- ================================================================
-local SobreTab = Window:Tab({
-    Name = "Sobre",
-    Icon = "rbxassetid://4483345998"
+local SobreTab = Window:Tab({ Title = "Sobre", Icon = "info" })
+
+SobreTab:Section({ Title = "Informacoes do Script" })
+
+SobreTab:Paragraph({
+    Title = "Info",
+    Desc = "Nome: Receptionist Script V3\n" ..
+        "Versao: 3.0.0\n" ..
+        "Autor: Admin\n" ..
+        "Biblioteca: WindUI\n\n" ..
+        "Descricao: Script completo para\n" ..
+        "recepcionista do Animal Hospital\n\n" ..
+        "Highlights:\n" ..
+        "- Visitor = Vermelho\n" ..
+        "- Paciente = Verde\n" ..
+        "- Anomalia = Rosa\n\n" ..
+        "Ultima Atualizacao: " .. os.date("%d/%m/%Y")
 })
 
-SobreTab:Section("Informacoes do Script")
-
-SobreTab:Paragraph("Info",
-    "Nome: Receptionist Script V3\n" ..
-    "Versao: 3.0.0\n" ..
-    "Autor: Admin\n" ..
-    "Biblioteca: Wind UI\n\n" ..
-    "Descricao: Script completo para\n" ..
-    "recepcionista do Animal Hospital\n\n" ..
-    "Highlights:\n" ..
-    "- Visitor = Vermelho\n" ..
-    "- Paciente = Verde\n" ..
-    "- Anomalia = Rosa\n\n" ..
-    "Ultima Atualizacao: " .. os.date("%d/%m/%Y")
-)
-
-SobreTab:Section("Comandos Rapidos")
+SobreTab:Section({ Title = "Comandos Rapidos" })
 
 SobreTab:Button({
-    Name = "Ver Comandos",
+    Title = "Ver Comandos",
     Callback = function()
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Comandos",
             Content = "SecretaryTask:Start() - Executa todas as tarefas\n" ..
-                      "RegisterPatient(dados) - Registra paciente\n" ..
-                      "HighlightAll() - Destaca elementos\n" ..
-                      "GetStatus() - Ver status\n" ..
-                      "ClearPatient() - Limpa paciente",
+                "RegisterPatient(dados) - Registra paciente\n" ..
+                "HighlightAll() - Destaca elementos\n" ..
+                "GetStatus() - Ver status\n" ..
+                "ClearPatient() - Limpa paciente",
             Duration = 5,
             Color = Colors.Accent
         })
@@ -1423,21 +1316,18 @@ SobreTab:Button({
 })
 
 SobreTab:Button({
-    Name = "Ver Ajuda",
+    Title = "Ver Ajuda",
     Callback = function()
         print(SobreModule:Ajuda())
-        Wind:Notify({
+        WindUI:Notify({
             Title = "Ajuda",
             Content = "Verifique o console para ajuda completa!",
             Duration = 3,
-            Color = Colors.Info
+            Color = Colors.Accent
         })
     end
 })
 
--- ================================================================
--- FUNÇÕES GLOBAIS
--- ================================================================
 _G.ReceptionistScript = {
     Principal = PrincipalModule,
     Utilidades = UtilidadesModule,
@@ -1448,19 +1338,16 @@ _G.ReceptionistScript = {
     Highlights = HighlightSystem,
     SecretaryTask = SecretaryTask,
 
-    -- Funcoes principais
     RegisterPatient = function(data) return PrincipalModule:RegisterPatient(data) end,
     GetStatus = function() return PrincipalModule:GetStatus() end,
     ClearPatient = function() return PrincipalModule:ClearPatient() end,
 
-    -- Highlights
     HighlightAll = function(options) return HighlightSystem:HighlightAll(options) end,
     HighlightVisitor = function(model) return HighlightSystem:HighlightVisitor(model) end,
     HighlightPaciente = function(model) return HighlightSystem:HighlightPaciente(model) end,
     HighlightAnomalia = function(model) return HighlightSystem:HighlightAnomalia(model) end,
     ClearHighlights = function() return HighlightSystem:ClearAll() end,
 
-    -- Tarefas
     FillForm = function(formType) return MiscModule:FillForm(formType) end,
     TakePhoto = function() return MiscModule:TakePhoto() end,
     UseComputer = function(action) return MiscModule:UseComputer(action) end,
@@ -1468,11 +1355,9 @@ _G.ReceptionistScript = {
     AccessCameras = function() return MiscModule:AccessCameras() end,
     AccessFiles = function(drawer) return MiscModule:AccessFiles(drawer) end,
 
-    -- Visual
     Notify = function(title, msg) return VisualModule:Notification(title, msg) end,
     Flash = function() return VisualModule:Flash() end,
 
-    -- Info
     Info = function() return SobreModule:Info() end,
     Help = function() return SobreModule:Ajuda() end,
     Comandos = function() return SobreModule:Comandos() end
@@ -1480,18 +1365,13 @@ _G.ReceptionistScript = {
 
 _G.RS = _G.ReceptionistScript
 _G.SecretaryTask = _G.ReceptionistScript.SecretaryTask
-
--- Atalhos para highlights
 _G.HighlightAll = _G.ReceptionistScript.HighlightAll
 _G.ClearHighlights = _G.ReceptionistScript.ClearHighlights
 
--- ================================================================
--- INICIALIZAÇÃO
--- ================================================================
 task.spawn(function()
     print("================================================")
     print("RECEPTIONIST SCRIPT V3 CARREGADO")
-    print("Biblioteca: Wind UI")
+    print("Biblioteca: WindUI")
     print("Highlights: Visitor (Vermelho), Paciente (Verde), Anomalia (Rosa)")
     print("")
     print("Categorias: Principal, Tarefas, Highlights, Utilidades, Visual, Estatisticas, Sobre")
