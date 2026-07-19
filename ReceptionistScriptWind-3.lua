@@ -113,26 +113,21 @@ function HighlightSystem:RefreshScan()
     local elements = FindGameElements()
     local seen = {}
 
-    local function scanPool(pool, isAnomalyPool)
-        if not pool then return end
-        for _, child in ipairs(pool:GetChildren()) do
+    -- Nota: o jogo (Animal Hospital) esconde os "anomalies" disfarcados de
+    -- pacientes normais de propósito - nao existe um jeito confiavel de
+    -- detectar isso via script (precisa checar camera/foto na mao). Por isso
+    -- so destacamos quem esta na fila, sem tentar adivinhar quem e anomalia.
+    if elements.NPCs then
+        for _, child in ipairs(elements.NPCs:GetChildren()) do
             if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
                 local id = child:GetFullName()
                 seen[id] = true
                 if not HighlightSystem.ActiveHighlights[id] then
-                    if isAnomalyPool then
-                        HighlightSystem:HighlightAnomalia(child)
-                    else
-                        HighlightSystem:HighlightPaciente(child)
-                    end
+                    HighlightSystem:HighlightPaciente(child)
                 end
             end
         end
     end
-
-    scanPool(elements.Visitors, false)
-    scanPool(elements.NPCs, false)
-    scanPool(elements.Anomalies, true)
 
     for id, highlight in pairs(HighlightSystem.ActiveHighlights) do
         if not seen[id] then
@@ -239,9 +234,7 @@ FindGameElements = function()
         FormStation = nil,
         PatientBadge = nil,
         VisitorBadge = nil,
-        NPCs = nil,
-        Visitors = nil,
-        Anomalies = nil
+        NPCs = nil -- fila REAL de pacientes/visitantes aguardando atendimento
     }
 
     if Workspace:FindFirstChild("Misc") then
@@ -254,7 +247,6 @@ FindGameElements = function()
             elements.Printer = elements.CheckIn:FindFirstChild("Printer")
             elements.PatientBadge = elements.CheckIn:FindFirstChild("PatientBadgeBase")
             elements.VisitorBadge = elements.CheckIn:FindFirstChild("VisitorBadgeBase")
-            elements.FormStation = elements.CheckIn:FindFirstChild("Form") or elements.CheckIn:FindFirstChild("FormStation")
         end
 
         if not elements.Computer then
@@ -263,23 +255,24 @@ FindGameElements = function()
         if not elements.Printer then
             elements.Printer = misc:FindFirstChild("Printer")
         end
-        if not elements.FormStation then
-            elements.FormStation = misc:FindFirstChild("FormStation")
-        end
     end
 
-    if not elements.FormStation and ReplicatedStorage:FindFirstChild("Misc") then
+    -- FormStation e opcional/experimental: nao foi confirmado como parte do
+    -- balcao de Check-In (fica em ReplicatedStorage.Misc.Form, separado).
+    -- So e usado se SecretariaModule.Settings.UseFormStation estiver ativo.
+    if ReplicatedStorage:FindFirstChild("Misc") then
         elements.FormStation = ReplicatedStorage.Misc:FindFirstChild("Form")
     end
 
+    -- IMPORTANTE (causa do bug de "repetir atendimento"):
+    -- ReplicatedStorage.NPCs.Visitors e ReplicatedStorage.NPCs.Anomalies sao
+    -- apenas os MODELOS-MOLDE (templates) que o jogo usa pra clonar os NPCs.
+    -- Eles nunca saem dali, entao usa-los como "fila de espera" fazia o script
+    -- achar o mesmo "paciente fantasma" pra sempre e reprocessar em loop.
+    -- A fila real (pacientes/visitantes de fato no mundo, na janela) fica em
+    -- Workspace.NPCs - e a UNICA fonte usada agora.
     if Workspace:FindFirstChild("NPCs") then
         elements.NPCs = Workspace.NPCs
-    end
-
-    if ReplicatedStorage:FindFirstChild("NPCs") then
-        local npcsRS = ReplicatedStorage.NPCs
-        elements.Visitors = npcsRS:FindFirstChild("Visitors")
-        elements.Anomalies = npcsRS:FindFirstChild("Anomalies")
     end
 
     return elements
@@ -289,43 +282,55 @@ local SecretariaModule = {
     State = {
         Enabled = false,
         Running = false,
-        CurrentPatient = nil
+        CurrentPatient = nil,
+        InProgress = {} -- trava por modelo, evita processar o mesmo 2x ao mesmo tempo
     },
     Settings = {
         LoopDelay = 1.5,
         ShowNotifications = true,
-        AutoSkipAnomalies = true,
-        FichaPickupTimeout = 8
+        FichaPickupTimeout = 8,
+        UseFormStation = true,
+        DefaultBadgeType = "Patient" -- "Patient" ou "Visitor", usado quando nao ha como saber o tipo do NPC
     },
     Stats = {
-        processed = 0,
-        anomaliesSkipped = 0
+        processed = 0
     }
 }
 
-local function IsAnomaly(model)
-    local elements = FindGameElements()
-    if elements.Anomalies and model:IsDescendantOf(elements.Anomalies) then
-        return true
-    end
-    return false
-end
+-- Nota importante sobre "anomalias":
+-- O Animal Hospital foi feito de propósito pra anomalia se disfarçar de
+-- paciente normal (Skinwalker etc.) - a deteccao real e visual (janela, foto
+-- da Polaroid e camera de CCTV), nao existe uma flag/pasta no jogo que diga
+-- "isso aqui e uma anomalia" acessivel por script. Por isso este script NAO
+-- tenta mais "pular anomalias" automaticamente (a versao antiga achava que
+-- fazia isso, mas estava lendo os MODELOS-MOLDE do jogo, nao pacientes reais,
+-- entao nunca funcionou de verdade). Ele atende todo mundo que aparece na
+-- fila. Se quiser rejeitar anomalias, isso ainda precisa ser feito na mao.
 
-local ProcessedRegistry = {}
-local PROCESSED_TTL = 20
+local ProcessedRegistry = {} -- [model] = true enquanto o NPC ainda esta na fila
 
 local function MarkProcessed(model)
-    ProcessedRegistry[model] = os.clock()
+    if ProcessedRegistry[model] then return end
+    ProcessedRegistry[model] = true
+
+    local conn
+    conn = model.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            ProcessedRegistry[model] = nil
+            if conn then conn:Disconnect() end
+        end
+    end)
+
+    -- trava de seguranca: se o NPC nunca sumir do jogo por algum motivo,
+    -- libera o registro depois de um tempo generoso pra nao vazar memoria
+    task.delay(180, function()
+        ProcessedRegistry[model] = nil
+        if conn then conn:Disconnect() end
+    end)
 end
 
 local function IsMarkedProcessed(model)
-    local markedAt = ProcessedRegistry[model]
-    if not markedAt then return false end
-    if os.clock() - markedAt > PROCESSED_TTL then
-        ProcessedRegistry[model] = nil
-        return false
-    end
-    return true
+    return ProcessedRegistry[model] == true
 end
 
 local function WaitAndFire(container, timeout)
@@ -354,26 +359,50 @@ local function WaitAndFire(container, timeout)
     return false
 end
 
+local function GetAnchorPart(target)
+    if not target then return nil end
+    if target:IsA("BasePart") then return target end
+
+    local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+        return prompt.Parent
+    end
+
+    return (target:IsA("Model") and target.PrimaryPart) or target:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function TeleportCharacterTo(part, offset)
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root or not part then return nil end
+
+    local original = root.CFrame
+    root.CFrame = CFrame.new(part.Position + (offset or Vector3.new(0, 3, 0)))
+    return original
+end
+
+-- Da TP em cima do objeto e dispara o ProximityPrompt dele.
+local function TeleportAndFire(target, timeout)
+    if not target then return false end
+
+    local anchor = GetAnchorPart(target)
+    if anchor then
+        TeleportCharacterTo(anchor)
+        task.wait(0.2)
+    end
+
+    return WaitAndFire(target, timeout)
+end
+
 local function GetWaitingPatients()
     local waiting = {}
     local elements = FindGameElements()
-    local pools = {
-        { pool = elements.Visitors, isVisitor = true },
-        { pool = elements.NPCs, isVisitor = false }
-    }
 
-    if SecretariaModule.Settings.AutoSkipAnomalies and elements.Anomalies then
-        table.insert(pools, { pool = elements.Anomalies, isVisitor = false })
-    end
-
-    for _, entry in ipairs(pools) do
-        if entry.pool then
-            for _, child in ipairs(entry.pool:GetChildren()) do
-                if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
-                    if not IsMarkedProcessed(child) then
-                        child:SetAttribute("SecretariaIsVisitor", entry.isVisitor)
-                        table.insert(waiting, child)
-                    end
+    if elements.NPCs then
+        for _, child in ipairs(elements.NPCs:GetChildren()) do
+            if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
+                if not IsMarkedProcessed(child) and not SecretariaModule.State.InProgress[child] then
+                    table.insert(waiting, child)
                 end
             end
         end
@@ -382,19 +411,42 @@ local function GetWaitingPatients()
     return waiting
 end
 
+local function GetBadgeBase(elements, model)
+    -- Se algum dia o jogo/outro script marcar o tipo via atributo, respeita ele.
+    local explicitType = model:GetAttribute("SecretariaBadgeType")
+    local badgeType = explicitType or SecretariaModule.Settings.DefaultBadgeType
+
+    if badgeType == "Visitor" and elements.VisitorBadge then
+        return elements.VisitorBadge
+    end
+
+    return elements.PatientBadge or elements.VisitorBadge
+end
+
 local function DeliverFicha(model, badgeBase)
     if not badgeBase then
         warn("[Secretaria] Badge base nao encontrado em Misc.CheckIn - entrega pulada.")
         return
     end
 
-    local grabbed = WaitAndFire(badgeBase, SecretariaModule.Settings.FichaPickupTimeout)
+    -- TP em cima da ficha e pega ela
+    local grabbed = TeleportAndFire(badgeBase, SecretariaModule.Settings.FichaPickupTimeout)
     if not grabbed then
         warn("[Secretaria] Nao consegui pegar a ficha (" .. badgeBase:GetFullName() .. ").")
         return
     end
 
     task.wait(0.4)
+
+    -- TP em cima do paciente pra entregar
+    local targetPart = GetAnchorPart(model)
+        or (model:IsA("Model") and model.PrimaryPart)
+        or model:FindFirstChild("HumanoidRootPart", true)
+
+    if targetPart then
+        TeleportCharacterTo(targetPart, Vector3.new(0, 0, 2))
+        task.wait(0.2)
+    end
 
     local deliverPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
     if deliverPrompt then
@@ -404,9 +456,6 @@ local function DeliverFicha(model, badgeBase)
 
     local character = LocalPlayer.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
-    local targetPart = (model:IsA("Model") and model.PrimaryPart)
-        or model:FindFirstChild("HumanoidRootPart", true)
-        or model:FindFirstChildWhichIsA("BasePart", true)
 
     if root and targetPart and typeof(firetouchinterest) == "function" then
         local originalCFrame = root.CFrame
@@ -425,62 +474,68 @@ local function DeliverFicha(model, badgeBase)
 end
 
 local function ProcessPatient(model)
-    SecretariaModule.State.CurrentPatient = model
-
-    if SecretariaModule.Settings.AutoSkipAnomalies and IsAnomaly(model) then
-        HighlightSystem:HighlightAnomalia(model)
-        MarkProcessed(model)
-        SecretariaModule.Stats.anomaliesSkipped += 1
-
-        if SecretariaModule.Settings.ShowNotifications then
-            UI:Notify("Anomalia Detectada", (model.Name or "Paciente") .. " foi sinalizado e NAO sera registrado.", 4, "warning")
-        end
-
-        SecretariaModule.State.CurrentPatient = nil
+    if SecretariaModule.State.InProgress[model] or IsMarkedProcessed(model) then
         return
     end
 
-    local elements = FindGameElements()
-    local isVisitor = model:GetAttribute("SecretariaIsVisitor") == true
+    SecretariaModule.State.InProgress[model] = true
+    SecretariaModule.State.CurrentPatient = model
 
-    if elements.CheckIn then
-        WaitAndFire(elements.CheckIn, 3)
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local originalCFrame = root and root.CFrame
+
+    local ok, err = pcall(function()
+        local elements = FindGameElements()
+
+        -- Sequencia pedida: formulario -> camera (foto) -> computador (registro)
+        -- -> impressora -> ficha (pega) -> paciente (entrega). Da TP em cima de
+        -- cada objeto antes de disparar o ProximityPrompt dele.
+
+        if SecretariaModule.Settings.UseFormStation and elements.FormStation then
+            TeleportAndFire(elements.FormStation, 3)
+            task.wait(0.3)
+        end
+
+        UI:Flash(0.15, Color3.fromRGB(255, 255, 255))
+
+        if elements.Camera then
+            TeleportAndFire(elements.Camera, 3)
+        end
+        task.wait(0.4)
+
+        if elements.Computer then
+            TeleportAndFire(elements.Computer, 3)
+        else
+            warn("[Secretaria] Computer nao encontrado em Misc.CheckIn - registro pulado.")
+        end
+        task.wait(0.6)
+
+        if elements.Printer then
+            TeleportAndFire(elements.Printer, 3)
+        else
+            warn("[Secretaria] Printer nao encontrado em Misc.CheckIn - impressao pulada.")
+        end
+        task.wait(0.4)
+
+        local badgeBase = GetBadgeBase(elements, model)
+        DeliverFicha(model, badgeBase)
+    end)
+
+    if not ok then
+        warn("[Secretaria] Erro ao processar " .. model:GetFullName() .. ": " .. tostring(err))
     end
-    task.wait(0.4)
 
-    if elements.FormStation then
-        WaitAndFire(elements.FormStation, 3)
-    end
-    task.wait(0.4)
-
-    UI:Flash(0.15, Color3.fromRGB(255, 255, 255))
-    if elements.Camera then
-        WaitAndFire(elements.Camera, 3)
-    end
-    task.wait(0.4)
-
-    if elements.Computer then
-        WaitAndFire(elements.Computer, 3)
-    else
-        warn("[Secretaria] Computer nao encontrado em Misc.CheckIn - registro pulado.")
-    end
-    task.wait(0.6)
-
-    if elements.Printer then
-        WaitAndFire(elements.Printer, 3)
-    else
-        warn("[Secretaria] Printer nao encontrado em Misc.CheckIn - impressao pulada.")
+    if root and originalCFrame then
+        root.CFrame = originalCFrame
     end
 
-    local badgeBase = isVisitor and elements.VisitorBadge or elements.PatientBadge
-    DeliverFicha(model, badgeBase)
-
-    model:SetAttribute("SecretariaIsVisitor", nil)
     MarkProcessed(model)
     SecretariaModule.Stats.processed += 1
     SecretariaModule.State.CurrentPatient = nil
+    SecretariaModule.State.InProgress[model] = nil
 
-    if SecretariaModule.Settings.ShowNotifications then
+    if ok and SecretariaModule.Settings.ShowNotifications then
         UI:Notify("Paciente Atendido", (model.Name or "Paciente") .. " registrado e liberado.", 3, "success")
     end
 end
@@ -536,8 +591,7 @@ function SecretariaModule:GetStatus()
         enabled = SecretariaModule.State.Enabled,
         running = SecretariaModule.State.Running,
         currentPatient = SecretariaModule.State.CurrentPatient and SecretariaModule.State.CurrentPatient.Name or nil,
-        processed = SecretariaModule.Stats.processed,
-        anomaliesSkipped = SecretariaModule.Stats.anomaliesSkipped
+        processed = SecretariaModule.Stats.processed
     }
 end
 
@@ -594,6 +648,41 @@ local function PlayMenuAudio()
     end)
 end
 
+local AntiAFK = {
+    Enabled = false,
+    _idleConn = nil
+}
+
+function AntiAFK:Enable()
+    if AntiAFK.Enabled then return end
+    AntiAFK.Enabled = true
+
+    local ok, VirtualUser = pcall(function()
+        return game:GetService("VirtualUser")
+    end)
+
+    if not ok or not VirtualUser then
+        warn("[AntiAFK] VirtualUser indisponivel neste executor.")
+        AntiAFK.Enabled = false
+        return
+    end
+
+    AntiAFK._idleConn = LocalPlayer.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end)
+end
+
+function AntiAFK:Disable()
+    AntiAFK.Enabled = false
+    if AntiAFK._idleConn then
+        AntiAFK._idleConn:Disconnect()
+        AntiAFK._idleConn = nil
+    end
+end
+
 local Window = WindUI:CreateWindow({
     Title = "Receptionist Script V3",
     Icon = "https://files.catbox.moe/4guca7.jpg",
@@ -619,6 +708,37 @@ SecretariaTab:Toggle({
     end
 })
 
+SecretariaTab:Toggle({
+    Title = "Notificacoes de Atendimento",
+    Value = true,
+    Callback = function(state)
+        SecretariaModule.Settings.ShowNotifications = state
+    end
+})
+
+SecretariaTab:Dropdown({
+    Title = "Tipo de Ficha Padrao",
+    Values = { "Patient", "Visitor" },
+    Value = "Patient",
+    Callback = function(value)
+        SecretariaModule.Settings.DefaultBadgeType = value
+    end
+})
+
+SecretariaTab:Slider({
+    Title = "Delay Entre Atendimentos (s)",
+    Step = 0.1,
+    Value = { Min = 0.5, Max = 5, Default = 1.5 },
+    Callback = function(value)
+        SecretariaModule.Settings.LoopDelay = value
+    end
+})
+
+SecretariaTab:Paragraph({
+    Title = "Sobre deteccao de anomalia",
+    Desc = "O jogo esconde as anomalias disfarcadas de paciente normal de proposito (precisa checar janela/foto/CCTV na mao). Este script NAO consegue identificar isso automaticamente, entao ele atende todo mundo que aparece na fila."
+})
+
 local PrincipalTab = Window:Tab({ Title = "Principal", Icon = "clipboard-list" })
 PrincipalTab:Paragraph({ Title = "Principal", Desc = "Em desenvolvimento." })
 
@@ -641,7 +761,23 @@ VisualTab:Toggle({
 })
 
 local MiscTab = Window:Tab({ Title = "Misc", Icon = "layers" })
-MiscTab:Paragraph({ Title = "Misc", Desc = "Em desenvolvimento." })
+
+MiscTab:Section({ Title = "Anti-AFK" })
+MiscTab:Toggle({
+    Title = "Ativar Anti-AFK",
+    Value = false,
+    Callback = function(state)
+        if state then
+            AntiAFK:Enable()
+        else
+            AntiAFK:Disable()
+        end
+    end
+})
+MiscTab:Paragraph({
+    Title = "Anti-AFK",
+    Desc = "Evita ser desconectado por inatividade, pra secretaria continuar atendendo mesmo com voce parado/afk."
+})
 
 local WHATSAPP_LINK = "https://chat.whatsapp.com/COLOQUE_SEU_LINK_AQUI"
 local DISCORD_LINK = "https://discord.gg/COLOQUE_SEU_LINK_AQUI"
@@ -693,6 +829,7 @@ _G.ReceptionistScript = {
     Sobre = SobreModule,
     Highlights = HighlightSystem,
     Secretaria = SecretariaModule,
+    AntiAFK = AntiAFK,
 
     StartSecretaria = function() return SecretariaModule:Start() end,
     StopSecretaria = function() return SecretariaModule:Stop() end,
