@@ -1,5 +1,5 @@
 -- =====================================================================
--- ANIMAL HOSPITAL HUB v3.2 (ULTRA FAST - OMNI LOOK-AT TARGET)
+-- ANIMAL HOSPITAL HUB v3.4 (ULTRA FAST - OMNI LOOK-AT TARGET)
 -- Otimizado para Delta Executor - Mobile (Studio Lite Compliant)
 -- Cores: Dark, Crimson Red (Vermelho Escuro)
 -- SISTEMA DE FOCO VISUAL GLOBAL PARA TODOS OS PROXIMITYPROMPTS
@@ -1278,97 +1278,74 @@ RunService.Heartbeat:Connect(KeepSanityFull)
 KeepSanityFull()
 
 -- ==========================================
--- AUTO SECRETARIA (CHECK-IN) v3 - baseado na estrutura REAL do jogo
--- (Workspace.Misc.CheckIn): Camera -> Computer -> Printer (aguarda 1.5s) ->
--- Pegar Crachá (VisitorBadgeBase / PatientBadgeBase) -> Entregar ao NPC
+-- AUTO SECRETARIA (CHECK-IN) v4 - CORRIGIDO COMPLETO
+-- Estrutura real: NPCs (Chloe, Emi, Sadie) -> Camera -> Computer -> Printer -> Pegar Badge -> Entregar NPC
 -- ==========================================
 if Config.AutoSecretaria == nil then Config.AutoSecretaria = false end
 
-local PRINTER_WAIT_TIME = 1.5    -- tempo pra impressora terminar de imprimir
-local STEP_RETRIES = 5           -- tentativas por etapa antes de desistir
-local BADGE_ITEM_NAMES = { "badge", "crachá", "cracha", "id" }
-local BADGE_BASE_NAMES = { "VisitorBadgeBase", "PatientBadgeBase" } -- nomes reais no jogo
+local PRINTER_WAIT_TIME = 1.5
+local STEP_RETRIES = 8
+local BADGE_ITEM_NAMES = { "badge", "crachá", "cracha", "id", "visitor", "patient" }
+local CHECKIN_STEPS = { "Camera", "Computer", "Printer" }
 
+-- Pasta CheckIn
 local function GetCheckInFolder()
     local misc = Workspace:FindFirstChild("Misc")
     if not misc then return nil end
     return misc:FindFirstChild("CheckIn")
 end
 
--- Sempre busca de novo (não guarda referência velha) pra pegar o prompt atualizado a cada tentativa
+-- Pega o ProximityPrompt de um objeto no CheckIn
 local function GetCheckInPrompt(stepName)
     local checkIn = GetCheckInFolder()
-    if not checkIn then return nil end
+    if not checkIn then return nil, nil end
     local obj = checkIn:FindFirstChild(stepName)
-    if not obj then return nil end
-    if obj:IsA("ProximityPrompt") then return obj end
-    return obj:FindFirstChildOfClass("ProximityPrompt")
+    if not obj then return nil, nil end
+    if obj:IsA("ProximityPrompt") then return obj, obj end
+    local pp = obj:FindFirstChildOfClass("ProximityPrompt")
+    return pp, obj
 end
 
--- Interage repetidamente com uma etapa do check-in até funcionar (ou esgotar tentativas)
-local function DoCheckInStep(stepName, label, waitAfter)
-    waitAfter = waitAfter or 0.6
-    for attempt = 1, STEP_RETRIES do
-        if not Config.AutoSecretaria then return false end
-
-        local prompt = GetCheckInPrompt(stepName)
-        if prompt and prompt.Enabled then
-            local part = FindBasePartInObject(prompt.Parent)
-            if part then
-                print("📋 Secretária: " .. label .. " (tentativa " .. attempt .. ")...")
-                SafeTeleport(GetApproachPosition(part.Position, 3))
-                task.wait(0.3) -- aguarda o teleporte assentar antes de interagir (corrige falha silenciosa)
-                LookAtPosition(part.Position)
-                local ok = FirePromptDirect(prompt)
-                task.wait(waitAfter)
-                if ok then return true end
-            end
-        else
-            -- Prompt pode já ter sido consumido por outra tentativa; considera concluído
-            if attempt > 1 then return true end
-        end
-
-        task.wait(0.3)
-    end
-    print("⚠️ Secretária: não foi possível concluir '" .. label .. "' após " .. STEP_RETRIES .. " tentativas.")
-    return false
-end
-
--- Acha o paciente que está esperando check-in: prioriza NPCs próximos do balcão com prompt habilitado
-local function GetWaitingPatient()
+-- Procura NPCs próximos que precisam de check-in (têm prompt habilitado)
+local function GetCheckInNPC()
     local checkIn = GetCheckInFolder()
-    local refPart = checkIn and FindBasePartInObject(checkIn)
-    if not refPart then refPart = GetRootPart() end
-    if not refPart then return nil end
+    local refPart = nil
+    if checkIn then
+        refPart = FindBasePartInObject(checkIn)
+    end
+    if not refPart then
+        refPart = GetRootPart()
+    end
+    if not refPart then return nil, nil end
 
     local npcsFolder = Workspace:FindFirstChild("NPCs")
-    if not npcsFolder then return nil end
+    if not npcsFolder then return nil, nil end
 
-    local bestModel, bestPart, bestDist = nil, nil, math.huge
+    local bestNPC, bestPart, bestDist = nil, nil, math.huge
     for _, npc in ipairs(npcsFolder:GetChildren()) do
         if npc:IsA("Model") then
-            local hasEnabledPrompt = false
+            local hasPrompt = false
             for _, desc in ipairs(npc:GetDescendants()) do
                 if desc:IsA("ProximityPrompt") and desc.Enabled then
-                    hasEnabledPrompt = true
+                    hasPrompt = true
                     break
                 end
             end
-            if hasEnabledPrompt then
+            if hasPrompt then
                 local part = FindBasePartInObject(npc)
                 if part then
                     local dist = (part.Position - refPart.Position).Magnitude
                     if dist < bestDist then
-                        bestModel, bestPart, bestDist = npc, part, dist
+                        bestNPC, bestPart, bestDist = npc, part, dist
                     end
                 end
             end
         end
     end
-
-    return bestModel, bestPart
+    return bestNPC, bestPart
 end
 
+-- Verifica se tem o badge no inventário
 local function HasBadgeItem()
     for _, name in ipairs(BADGE_ITEM_NAMES) do
         if HasItem(name) then return true, name end
@@ -1376,154 +1353,226 @@ local function HasBadgeItem()
     return false, nil
 end
 
--- Interage com o ProximityPrompt do PRÓPRIO paciente/NPC (não do balcão).
--- O jogo reaproveita esse mesmo prompt em estágios diferentes do check-in:
--- primeiro pra "carimbar o formulário" (isso é o que HABILITA a Camera.PP
--- depois) e, no final, pra "entregar o crachá". Por isso usamos uma função
--- genérica em vez de procurar um objeto fixo chamado "Form".
-local function DoPatientPromptStep(label, waitAfter, acceptCheck)
-    waitAfter = waitAfter or 0.8
+-- Interage com NPC (formulário/carimbo e entrega final)
+local function InteractWithNPC(label, waitAfter, finalCheck)
+    waitAfter = waitAfter or 0.5
     for attempt = 1, STEP_RETRIES do
         if not Config.AutoSecretaria then return false end
 
-        local npcModel, patientPart = GetWaitingPatient()
-        if not npcModel or not patientPart then
-            print("⏳ Secretária: procurando paciente pra '" .. label .. "'... (tentativa " .. attempt .. ")")
+        local npc, npcPart = GetCheckInNPC()
+        if not npc or not npcPart then
+            print("🔍 Secretária: " .. label .. " - Procurando NPC... (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+            task.wait(0.5)
         else
-            SafeTeleport(GetApproachPosition(patientPart.Position, 3))
-            task.wait(0.3) -- aguarda o teleporte assentar (corrige prompt não disparando)
-            LookAtPosition(patientPart.Position)
+            print("👤 Secretária: " .. label .. " - Interagindo com " .. npc.Name .. "... (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+
+            -- Teleporta e olha pro NPC
+            SafeTeleport(GetApproachPosition(npcPart.Position, 3))
+            task.wait(0.3)
+            LookAtPosition(npcPart.Position)
             task.wait(0.2)
 
-            local prompt = nil
-            for _, desc in ipairs(npcModel:GetDescendants()) do
+            -- Procura prompt habilitado no NPC
+            for _, desc in ipairs(npc:GetDescendants()) do
                 if desc:IsA("ProximityPrompt") and desc.Enabled then
-                    prompt = desc
+                    local ok = FirePromptDirect(desc)
+                    task.wait(waitAfter)
+                    if ok then
+                        if not finalCheck or finalCheck() then
+                            return true
+                        end
+                    end
                     break
                 end
             end
-
-            if prompt then
-                print("📋 Secretária: " .. label .. " (" .. npcModel.Name .. ") tentativa " .. attempt .. "...")
-                local ok = FirePromptDirect(prompt)
-                task.wait(waitAfter)
-                if ok and (not acceptCheck or acceptCheck()) then return true end
-            else
-                print("⏳ Secretária: prompt do paciente ainda não habilitado pra '" .. label .. "'...")
-            end
         end
-
         task.wait(0.3)
     end
-    print("⚠️ Secretária: não foi possível concluir '" .. label .. "' após " .. STEP_RETRIES .. " tentativas.")
     return false
 end
 
--- Acha o prompt de pegar o crachá já impresso, testando os dois nomes reais
--- que o jogo usa (visitante ou paciente, dependendo do tipo de check-in atual)
-local function GetPrintedBadgePrompt()
-    for _, baseName in ipairs(BADGE_BASE_NAMES) do
-        local prompt = GetCheckInPrompt(baseName)
-        if prompt and prompt.Enabled then return prompt end
+-- Interage com objeto do CheckIn (Camera, Computer, Printer)
+local function InteractWithCheckIn(stepName, label, waitAfter)
+    waitAfter = waitAfter or 0.6
+    for attempt = 1, STEP_RETRIES do
+        if not Config.AutoSecretaria then return false end
+
+        local prompt, obj = GetCheckInPrompt(stepName)
+        if not prompt then
+            print("🔍 Secretária: " .. label .. " - Aguardando " .. stepName .. "... (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+            task.wait(0.5)
+        elseif not prompt.Enabled then
+            print("⏳ Secretária: " .. label .. " - Prompt desabilitado, aguardando... (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+            task.wait(0.5)
+        else
+            local part = FindBasePartInObject(obj)
+            if part then
+                print("📋 Secretária: " .. label .. " (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+                SafeTeleport(GetApproachPosition(part.Position, 3))
+                task.wait(0.3)
+                LookAtPosition(part.Position)
+                local ok = FirePromptDirect(prompt)
+                task.wait(waitAfter)
+                if ok then return true end
+            end
+        end
+        task.wait(0.3)
     end
-    return nil
+    print("⚠️ Secretária: Falhou em " .. label)
+    return false
 end
 
--- Pega o crachá impresso, validando que o item realmente foi pro inventário (com retry)
-local function PickUpPrintedBadge()
+-- Pega o badge impresso (VisitorBadgeBase ou PatientBadgeBase)
+local function PickUpBadge()
     local already, _ = HasBadgeItem()
-    if already then return true end
+    if already then
+        print("✅ Secretária: Badge já está no inventário")
+        return true
+    end
 
     for attempt = 1, STEP_RETRIES do
         if not Config.AutoSecretaria then return false end
 
-        local prompt = GetPrintedBadgePrompt()
-        if prompt then
-            local part = FindBasePartInObject(prompt.Parent)
-            if part then
-                print("🪪 Secretária: pegando crachá (" .. prompt.Parent.Name .. ") tentativa " .. attempt .. "...")
-                SafeTeleport(GetApproachPosition(part.Position, 3))
-                task.wait(0.3) -- aguarda o teleporte assentar antes de interagir
-                LookAtPosition(part.Position)
-                FirePromptDirect(prompt)
-                task.wait(0.4)
+        -- Tenta pegar de VisitorBadgeBase ou PatientBadgeBase
+        local badgeNames = { "VisitorBadgeBase", "PatientBadgeBase" }
+        local found = false
+
+        for _, badgeName in ipairs(badgeNames) do
+            local prompt, obj = GetCheckInPrompt(badgeName)
+            if prompt and prompt.Enabled then
+                local part = FindBasePartInObject(obj)
+                if part then
+                    print("🪪 Secretária: Pegando Badge de " .. badgeName .. " (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+                    SafeTeleport(GetApproachPosition(part.Position, 3))
+                    task.wait(0.3)
+                    LookAtPosition(part.Position)
+                    FirePromptDirect(prompt)
+                    task.wait(0.4)
+                    found = true
+                end
             end
         end
 
+        -- Verifica se pegou
         local got, _ = HasBadgeItem()
-        if got then return true end
-        task.wait(0.3)
-    end
+        if got then
+            print("✅ Secretária: Badge pego com sucesso!")
+            return true
+        end
 
-    print("⚠️ Secretária: crachá impresso não encontrado no inventário após tentativas.")
+        if not found then
+            print("🔍 Secretária: Badge ainda não disponível... (tentativa " .. attempt .. "/" .. STEP_RETRIES .. ")")
+        end
+        task.wait(0.4)
+    end
+    print("⚠️ Secretária: Não conseguiu pegar o badge")
     return false
 end
 
--- Entrega o crachá ao paciente que está esperando (equipa o item e interage com o NPC)
-local function DeliverBadgeToPatient()
-    -- Equipa o crachá ANTES de se aproximar: em muitos jogos o prompt de entrega
-    -- só fica Enabled no NPC quando o jogador já está com o item na mão
+-- Entrega o badge ao NPC
+local function DeliverBadgeToNPC()
     local hasBadge, badgeName = HasBadgeItem()
-    if hasBadge and badgeName then
-        EquipToolFast(badgeName)
-        task.wait(0.15)
+    if not hasBadge then
+        print("⚠️ Secretária: Não tem badge para entregar!")
+        return false
     end
 
-    return DoPatientPromptStep("Entregando Crachá", 0.5, function()
+    print("🎫 Secretária: Entregando badge ao NPC...")
+
+    -- Equipa o badge
+    EquipToolFast(badgeName)
+    task.wait(0.2)
+
+    -- Interage com NPC
+    return InteractWithNPC("Entregando Badge", 0.5, function()
         return not HasBadgeItem()
     end)
 end
 
+-- SEQUÊNCIA PRINCIPAL DO AUTO SECRETARIA
 local function AutoSecretariaSequence()
     local checkIn = GetCheckInFolder()
     if not checkIn then
-        print("❌ Pasta CheckIn não encontrada!")
+        print("❌ Secretária: Pasta CheckIn não encontrada!")
         return
     end
 
-    print("🗂️ Iniciando Auto Secretária (Check-In)...")
+    print("🗂️ ======================================")
+    print("🗂️ INICIANDO AUTO SECRETÁRIA (v4)")
+    print("🗂️ ======================================")
 
-    -- 1) Carimbar o formulário: interage com o prompt do PRÓPRIO paciente
-    -- (é essa etapa que HABILITA a Camera.PP depois — por isso a foto não
-    -- estava funcionando quando esse passo era pulado)
-    if not DoPatientPromptStep("Carimbando Formulário", 0.8) then return end
-    if not Config.AutoSecretaria then return end
-    task.wait(0.5)
-
-    -- 2) Tirar a foto do paciente (Camera.PP)
-    if not DoCheckInStep("Camera", "Tirando Foto", 0.8) then return end
-    if not Config.AutoSecretaria then return end
-    task.wait(0.5)
-
-    -- 3) Registrar no computador (Computer.PP)
-    if not DoCheckInStep("Computer", "Registrando no Computador", 0.8) then return end
-    if not Config.AutoSecretaria then return end
-    task.wait(0.5)
-
-    -- 4) Imprimir o crachá (Printer.PP, aguarda 1.5s pra impressora terminar)
-    if not DoCheckInStep("Printer", "Imprimindo Crachá", PRINTER_WAIT_TIME) then return end
-    if not Config.AutoSecretaria then return end
-    task.wait(0.5)
-
-    -- 5) Pegar o crachá impresso (VisitorBadgeBase / PatientBadgeBase, com validação de inventário)
-    if not PickUpPrintedBadge() then return end
-    if not Config.AutoSecretaria then return end
-    task.wait(0.5)
-
-    -- 6) Entregar o crachá ao paciente que está esperando (prompt do próprio NPC)
-    if DeliverBadgeToPatient() then
-        print("✅ Auto Secretária: ciclo concluído!")
+    -- ETAPA 1: Interagir com NPC (formulário/carimbo)
+    print("📝 ETAPA 1: Carimbando Formulário com NPC...")
+    if not InteractWithNPC("Carimbando Formulário", 0.6) then
+        print("⚠️ Secretária: Falhou na Etapa 1 - Reiniciando ciclo...")
+        return
     end
+    if not Config.AutoSecretaria then return end
+    task.wait(0.5)
+
+    -- ETAPA 2: Camera (Tirar foto)
+    print("📸 ETAPA 2: Tirando Foto...")
+    if not InteractWithCheckIn("Camera", "Tirando Foto", 0.8) then
+        print("⚠️ Secretária: Falhou na Etapa 2 - Reiniciando ciclo...")
+        return
+    end
+    if not Config.AutoSecretaria then return end
+    task.wait(0.5)
+
+    -- ETAPA 3: Computer (Registrar)
+    print("💻 ETAPA 3: Registrando no Computador...")
+    if not InteractWithCheckIn("Computer", "Registrando", 0.8) then
+        print("⚠️ Secretária: Falhou na Etapa 3 - Reiniciando ciclo...")
+        return
+    end
+    if not Config.AutoSecretaria then return end
+    task.wait(0.5)
+
+    -- ETAPA 4: Printer (Imprimir)
+    print("🖨️ ETAPA 4: Imprimindo Crachá...")
+    if not InteractWithCheckIn("Printer", "Imprimindo", PRINTER_WAIT_TIME) then
+        print("⚠️ Secretária: Falhou na Etapa 4 - Reiniciando ciclo...")
+        return
+    end
+    if not Config.AutoSecretaria then return end
+    task.wait(0.5)
+
+    -- ETAPA 5: Pegar Badge
+    print("🪪 ETAPA 5: Pegando Badge...")
+    if not PickUpBadge() then
+        print("⚠️ Secretária: Falhou na Etapa 5 - Reiniciando ciclo...")
+        return
+    end
+    if not Config.AutoSecretaria then return end
+    task.wait(0.5)
+
+    -- ETAPA 6: Entregar ao NPC
+    print("🎫 ETAPA 6: Entregando Badge ao NPC...")
+    if not DeliverBadgeToNPC() then
+        print("⚠️ Secretária: Falhou na Etapa 6 - Reiniciando ciclo...")
+        return
+    end
+
+    print("✅ ======================================")
+    print("✅ AUTO SECRETÁRIA COMPLETO!")
+    print("✅ ======================================")
 end
 
+-- Loop principal
 task.spawn(function()
     while true do
         RunService.Heartbeat:Wait()
         if Config.AutoSecretaria then
             local ok, err = pcall(AutoSecretariaSequence)
-            if not ok then warn("[Auto Secretária] Erro: " .. tostring(err)) end
-            print("⏳ Auto Secretária: aguardando 2 segundos antes de reiniciar...")
-            wait(2)
+            if not ok then
+                warn("[Auto Secretária] Erro: " .. tostring(err))
+            end
+            if Config.AutoSecretaria then
+                print("⏳ Auto Secretária: Aguardando 2s antes do próximo ciclo...")
+                wait(2)
+            end
+        else
+            wait(0.5)
         end
     end
 end)
@@ -1567,7 +1616,7 @@ end)
 local Window = WindUI:CreateWindow({
     Title = "🦊 SILVERFOX | HOSPITAL DE ANIMAIS",
     Icon = "https://files.catbox.moe/0mg5gr.jpg",
-    Author = "v3.3 | FelpzSystem",
+    Author = "v3.4 | FelpzSystem",
     Theme = "Dark",
 })
 
@@ -1921,22 +1970,20 @@ AboutTab:Paragraph({
 
 AboutTab:Paragraph({
     Title = "✨ Versão & Créditos",
-    Desc = "Versão: v3.3\nCriador: FelpzSystem\nExecutor: Delta",
+    Desc = "Versão: v3.4\nCriador: FelpzSystem\nExecutor: Delta",
 })
 
 AboutTab:Paragraph({
-    Title = "⚡ Novidades v3.3",
-    Desc = "• Corrigido: Auto Secretária inteira (formulário, foto, computador,\n"
-        .. "   impressão e retirada de crachá) — faltava aguardar o teleporte\n"
-        .. "   assentar e olhar pro alvo antes de interagir, o que fazia os\n"
-        .. "   prompts não disparar em quase todas as etapas\n"
-        .. "• Novo: Auto Fechar Porta (aba Principal)\n"
-        .. "• Novo: Auto Anomalia — encontra e trata sozinho (aba Principal)\n"
-        .. "• Melhorado: Detecção de anomalia no ESP/Highlights (mais\n"
-        .. "   palavras-chave e checagem de Attributes Role/Type)\n"
-        .. "• Mantido: Manter Sanidade Cheia — já vem ATIVADO (aba Principal)\n"
-        .. "• Mantido: Remover Fog, FPS Boost (aba Visual)\n"
-        .. "• Mantido: Força do Pulo / Jump Power, Fly / Voo (aba Utilidades)\n"
+    Title = "⚡ Novidades v3.4",
+    Desc = "• CORRIGIDO COMPLETO: Auto Secretária v4 - Todas as 6 etapas\n"
+        .. "   funcionando: NPC(Form) → Camera → Computer → Printer →\n"
+        .. "   Pegar Badge → Entregar NPC\n"
+        .. "• Novo: Sistema de retries (8 tentativas por etapa)\n"
+        .. "• Novo: Logs detalhados com barra de progresso\n"
+        .. "• Novo: Verificação de badge no inventário\n"
+        .. "• Mantido: Manter Sanidade Cheia (sempre ativo)\n"
+        .. "• Mantido: Auto Fechar Porta, Auto Anomalia\n"
+        .. "• Mantido: Highlights, Fly, Noclip, FPS Boost\n"
         .. "• Abas: Principal, Utilidades, Visual, Misc, Sobre",
 })
 
@@ -1947,4 +1994,4 @@ AboutTab:Paragraph({
         .. "🔗 Link disponível na aba Misc",
 })
 
-print("🚀 [SILVERFOX | HOSPITAL DE ANIMAIS v3.3] Interface WindUI carregada!")
+print("🚀 [SILVERFOX | HOSPITAL DE ANIMAIS v3.4] Interface WindUI carregada!")
