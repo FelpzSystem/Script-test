@@ -28,10 +28,12 @@ local Colors = {
     Text = Color3.fromRGB(255, 255, 255),
     TextMuted = Color3.fromRGB(180, 180, 190),
     Border = Color3.fromRGB(80, 80, 90),
-    HighlightVisitor = Color3.fromRGB(255, 50, 50),
+    HighlightVisitor = Color3.fromRGB(50, 255, 50),
     HighlightPaciente = Color3.fromRGB(50, 255, 50),
-    HighlightAnomalia = Color3.fromRGB(255, 100, 200)
+    HighlightAnomalia = Color3.fromRGB(220, 53, 69)
 }
+
+local FindGameElements
 
 local HighlightSystem = {
     ActiveHighlights = {},
@@ -91,12 +93,70 @@ function HighlightSystem:HighlightVisitor(model)
     })
 end
 
-function HighlightSystem:HighlightAnomalia(model)
+function HighlightSystem:HighlightAnomalia(model, duration)
     if not model then return nil end
     return HighlightSystem:CreateHighlight(model, HighlightSystem.Settings.AnomaliaColor, {
         fillTransparency = 0.4,
-        duration = HighlightSystem.Settings.Duration
+        duration = duration
     })
+end
+
+function HighlightSystem:HighlightPaciente(model)
+    if not model then return nil end
+    return HighlightSystem:CreateHighlight(model, HighlightSystem.Settings.PacienteColor, {
+        fillTransparency = 0.5
+    })
+end
+
+function HighlightSystem:RefreshScan()
+    local elements = FindGameElements()
+    local seen = {}
+
+    local function scanPool(pool, isAnomalyPool)
+        if not pool then return end
+        for _, child in ipairs(pool:GetChildren()) do
+            if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
+                local id = child:GetFullName()
+                seen[id] = true
+                if not HighlightSystem.ActiveHighlights[id] then
+                    if isAnomalyPool then
+                        HighlightSystem:HighlightAnomalia(child)
+                    else
+                        HighlightSystem:HighlightPaciente(child)
+                    end
+                end
+            end
+        end
+    end
+
+    scanPool(elements.Visitors, false)
+    scanPool(elements.NPCs, false)
+    scanPool(elements.Anomalies, true)
+
+    for id, highlight in pairs(HighlightSystem.ActiveHighlights) do
+        if not seen[id] then
+            if highlight and highlight.Parent then
+                highlight:Destroy()
+            end
+            HighlightSystem.ActiveHighlights[id] = nil
+        end
+    end
+end
+
+function HighlightSystem:StartLiveScan()
+    if HighlightSystem._scanning then return end
+    HighlightSystem._scanning = true
+    task.spawn(function()
+        while HighlightSystem._scanning do
+            pcall(function() HighlightSystem:RefreshScan() end)
+            task.wait(1)
+        end
+    end)
+end
+
+function HighlightSystem:StopLiveScan()
+    HighlightSystem._scanning = false
+    HighlightSystem:ClearAll()
 end
 
 local UI = {}
@@ -218,12 +278,15 @@ local PlayerModule = {}
 local MiscModule = {}
 local SobreModule = {}
 
-local function FindGameElements()
+FindGameElements = function()
     local elements = {
         CheckIn = nil,
+        Camera = nil,
         Computer = nil,
         Printer = nil,
         FormStation = nil,
+        PatientBadge = nil,
+        VisitorBadge = nil,
         NPCs = nil,
         Visitors = nil,
         Anomalies = nil
@@ -232,9 +295,29 @@ local function FindGameElements()
     if Workspace:FindFirstChild("Misc") then
         local misc = Workspace.Misc
         elements.CheckIn = misc:FindFirstChild("CheckIn")
-        elements.Computer = misc:FindFirstChild("Computer")
-        elements.Printer = misc:FindFirstChild("Printer")
-        elements.FormStation = misc:FindFirstChild("FormStation")
+
+        if elements.CheckIn then
+            elements.Camera = elements.CheckIn:FindFirstChild("Camera")
+            elements.Computer = elements.CheckIn:FindFirstChild("Computer")
+            elements.Printer = elements.CheckIn:FindFirstChild("Printer")
+            elements.PatientBadge = elements.CheckIn:FindFirstChild("PatientBadgeBase")
+            elements.VisitorBadge = elements.CheckIn:FindFirstChild("VisitorBadgeBase")
+            elements.FormStation = elements.CheckIn:FindFirstChild("Form") or elements.CheckIn:FindFirstChild("FormStation")
+        end
+
+        if not elements.Computer then
+            elements.Computer = misc:FindFirstChild("Computer")
+        end
+        if not elements.Printer then
+            elements.Printer = misc:FindFirstChild("Printer")
+        end
+        if not elements.FormStation then
+            elements.FormStation = misc:FindFirstChild("FormStation")
+        end
+    end
+
+    if not elements.FormStation and ReplicatedStorage:FindFirstChild("Misc") then
+        elements.FormStation = ReplicatedStorage.Misc:FindFirstChild("Form")
     end
 
     if Workspace:FindFirstChild("NPCs") then
@@ -276,22 +359,35 @@ local function IsAnomaly(model)
     return false
 end
 
+local function FirePrompt(container)
+    if not container then return false end
+    local prompt = container:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and typeof(fireproximityprompt) == "function" then
+        return pcall(fireproximityprompt, prompt)
+    end
+    return false
+end
+
 local function GetWaitingPatients()
     local waiting = {}
     local elements = FindGameElements()
-    local pools = {}
+    local pools = {
+        { pool = elements.Visitors, isVisitor = true },
+        { pool = elements.NPCs, isVisitor = false }
+    }
 
-    if elements.Visitors then table.insert(pools, elements.Visitors) end
-    if elements.NPCs then table.insert(pools, elements.NPCs) end
     if SecretariaModule.Settings.AutoSkipAnomalies and elements.Anomalies then
-        table.insert(pools, elements.Anomalies)
+        table.insert(pools, { pool = elements.Anomalies, isVisitor = false })
     end
 
-    for _, pool in ipairs(pools) do
-        for _, child in ipairs(pool:GetChildren()) do
-            if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
-                if not child:GetAttribute("SecretariaProcessed") then
-                    table.insert(waiting, child)
+    for _, entry in ipairs(pools) do
+        if entry.pool then
+            for _, child in ipairs(entry.pool:GetChildren()) do
+                if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
+                    if not child:GetAttribute("SecretariaProcessed") then
+                        child:SetAttribute("SecretariaIsVisitor", entry.isVisitor)
+                        table.insert(waiting, child)
+                    end
                 end
             end
         end
@@ -316,41 +412,52 @@ local function ProcessPatient(model)
         return
     end
 
-    HighlightSystem:HighlightVisitor(model)
-
     local elements = FindGameElements()
+    local isVisitor = model:GetAttribute("SecretariaIsVisitor") == true
 
     if elements.CheckIn then
-        local prompt = elements.CheckIn:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if prompt and typeof(fireproximityprompt) == "function" then
-            pcall(fireproximityprompt, prompt)
-        end
+        FirePrompt(elements.CheckIn)
     end
-
     if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Chamando paciente...", 0.6) end
     task.wait(0.6)
 
+    if elements.FormStation then
+        FirePrompt(elements.FormStation)
+    end
+    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Preenchendo formulario...", 0.6) end
+    task.wait(0.6)
+
     UI:Flash(0.15, Color3.fromRGB(255, 255, 255))
+    if elements.Camera then
+        FirePrompt(elements.Camera)
+    end
     if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Tirando foto...", 0.5) end
     task.wait(0.5)
 
     if elements.Computer then
-        local prompt = elements.Computer:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if prompt and typeof(fireproximityprompt) == "function" then
-            pcall(fireproximityprompt, prompt)
-        end
+        FirePrompt(elements.Computer)
+    else
+        warn("[Secretaria] Computer nao encontrado em Misc.CheckIn - registro pulado.")
     end
     if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Registrando no computador...", 1) end
     task.wait(1)
 
     if elements.Printer then
-        local prompt = elements.Printer:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if prompt and typeof(fireproximityprompt) == "function" then
-            pcall(fireproximityprompt, prompt)
-        end
+        FirePrompt(elements.Printer)
+    else
+        warn("[Secretaria] Printer nao encontrado em Misc.CheckIn - impressao pulada.")
     end
     if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Imprimindo ficha...", 1) end
     task.wait(1)
+
+    local badgeBase = isVisitor and elements.VisitorBadge or elements.PatientBadge
+    if badgeBase then
+        FirePrompt(badgeBase)
+    else
+        warn("[Secretaria] Badge base nao encontrado em Misc.CheckIn - entrega pulada.")
+    end
+    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Entregando ficha ao paciente...", 0.6) end
+    task.wait(0.6)
 
     model:SetAttribute("SecretariaProcessed", true)
     SecretariaModule.Stats.processed += 1
@@ -390,6 +497,8 @@ function SecretariaModule:Start()
     SecretariaModule.State.Enabled = true
     SecretariaModule.State.Running = true
 
+    HighlightSystem:StartLiveScan()
+
     task.spawn(function()
         SecretariaModule:Loop()
     end)
@@ -401,6 +510,8 @@ end
 
 function SecretariaModule:Stop()
     SecretariaModule.State.Enabled = false
+
+    HighlightSystem:StopLiveScan()
 
     if SecretariaModule.Settings.ShowNotifications then
         UI:Notify("Secretaria Desativada", "Atendimento automatico parado.", 3, "warning")
