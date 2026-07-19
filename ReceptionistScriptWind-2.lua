@@ -151,6 +151,10 @@ function HighlightSystem:StartLiveScan()
         while HighlightSystem._scanning do
             if HighlightSystem.Enabled then
                 pcall(function() HighlightSystem:RefreshScan() end)
+            else
+                if next(HighlightSystem.ActiveHighlights) then
+                    HighlightSystem:ClearAll()
+                end
             end
             task.wait(1)
         end
@@ -168,6 +172,8 @@ function HighlightSystem:SetEnabled(state)
         HighlightSystem:ClearAll()
     end
 end
+
+HighlightSystem:StartLiveScan()
 
 local UI = {}
 
@@ -305,6 +311,23 @@ local function IsAnomaly(model)
     return false
 end
 
+local ProcessedRegistry = {}
+local PROCESSED_TTL = 20
+
+local function MarkProcessed(model)
+    ProcessedRegistry[model] = os.clock()
+end
+
+local function IsMarkedProcessed(model)
+    local markedAt = ProcessedRegistry[model]
+    if not markedAt then return false end
+    if os.clock() - markedAt > PROCESSED_TTL then
+        ProcessedRegistry[model] = nil
+        return false
+    end
+    return true
+end
+
 local function WaitAndFire(container, timeout)
     if not container then return false end
     timeout = timeout or 5
@@ -322,7 +345,11 @@ local function WaitAndFire(container, timeout)
     until elapsed >= timeout
 
     if prompt and typeof(fireproximityprompt) == "function" then
-        return pcall(fireproximityprompt, prompt)
+        local ok = pcall(fireproximityprompt, prompt, prompt.HoldDuration)
+        if ok and prompt.HoldDuration and prompt.HoldDuration > 0 then
+            task.wait(prompt.HoldDuration + 0.1)
+        end
+        return ok
     end
     return false
 end
@@ -343,7 +370,7 @@ local function GetWaitingPatients()
         if entry.pool then
             for _, child in ipairs(entry.pool:GetChildren()) do
                 if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
-                    if not child:GetAttribute("SecretariaProcessed") then
+                    if not IsMarkedProcessed(child) then
                         child:SetAttribute("SecretariaIsVisitor", entry.isVisitor)
                         table.insert(waiting, child)
                     end
@@ -355,12 +382,54 @@ local function GetWaitingPatients()
     return waiting
 end
 
+local function DeliverFicha(model, badgeBase)
+    if not badgeBase then
+        warn("[Secretaria] Badge base nao encontrado em Misc.CheckIn - entrega pulada.")
+        return
+    end
+
+    local grabbed = WaitAndFire(badgeBase, SecretariaModule.Settings.FichaPickupTimeout)
+    if not grabbed then
+        warn("[Secretaria] Nao consegui pegar a ficha (" .. badgeBase:GetFullName() .. ").")
+        return
+    end
+
+    task.wait(0.4)
+
+    local deliverPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if deliverPrompt then
+        WaitAndFire(model, 3)
+        return
+    end
+
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local targetPart = (model:IsA("Model") and model.PrimaryPart)
+        or model:FindFirstChild("HumanoidRootPart", true)
+        or model:FindFirstChildWhichIsA("BasePart", true)
+
+    if root and targetPart and typeof(firetouchinterest) == "function" then
+        local originalCFrame = root.CFrame
+        root.CFrame = targetPart.CFrame + Vector3.new(0, 0, 2)
+
+        task.wait(0.15)
+        pcall(firetouchinterest, root, targetPart, 0)
+        task.wait(0.15)
+        pcall(firetouchinterest, root, targetPart, 1)
+        task.wait(0.2)
+
+        root.CFrame = originalCFrame
+    else
+        warn("[Secretaria] Nao encontrei um jeito de entregar a ficha em " .. model:GetFullName() .. " - peguei a ficha mas nao entreguei.")
+    end
+end
+
 local function ProcessPatient(model)
     SecretariaModule.State.CurrentPatient = model
 
     if SecretariaModule.Settings.AutoSkipAnomalies and IsAnomaly(model) then
         HighlightSystem:HighlightAnomalia(model)
-        model:SetAttribute("SecretariaProcessed", true)
+        MarkProcessed(model)
         SecretariaModule.Stats.anomaliesSkipped += 1
 
         if SecretariaModule.Settings.ShowNotifications then
@@ -404,13 +473,10 @@ local function ProcessPatient(model)
     end
 
     local badgeBase = isVisitor and elements.VisitorBadge or elements.PatientBadge
-    if badgeBase then
-        WaitAndFire(badgeBase, SecretariaModule.Settings.FichaPickupTimeout)
-    else
-        warn("[Secretaria] Badge base nao encontrado em Misc.CheckIn - entrega pulada.")
-    end
+    DeliverFicha(model, badgeBase)
 
-    model:SetAttribute("SecretariaProcessed", true)
+    model:SetAttribute("SecretariaIsVisitor", nil)
+    MarkProcessed(model)
     SecretariaModule.Stats.processed += 1
     SecretariaModule.State.CurrentPatient = nil
 
@@ -448,8 +514,6 @@ function SecretariaModule:Start()
     SecretariaModule.State.Enabled = true
     SecretariaModule.State.Running = true
 
-    HighlightSystem:StartLiveScan()
-
     task.spawn(function()
         SecretariaModule:Loop()
     end)
@@ -461,8 +525,6 @@ end
 
 function SecretariaModule:Stop()
     SecretariaModule.State.Enabled = false
-
-    HighlightSystem:StopLiveScan()
 
     if SecretariaModule.Settings.ShowNotifications then
         UI:Notify("Secretaria Desativada", "Atendimento automatico parado.", 3, "warning")
@@ -479,6 +541,23 @@ function SecretariaModule:GetStatus()
     }
 end
 
+local function DownloadBinary(url)
+    local requestFn = (typeof(request) == "function" and request)
+        or (typeof(http_request) == "function" and http_request)
+        or (syn and typeof(syn.request) == "function" and syn.request)
+
+    if requestFn then
+        local ok, response = pcall(requestFn, { Url = url, Method = "GET" })
+        if ok and response and response.Body then
+            return response.Body
+        end
+    end
+
+    local ok, data = pcall(game.HttpGet, game, url)
+    if ok then return data end
+    return nil
+end
+
 local function LoadCustomAudio(url, filename)
     if typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then
         warn("[Secretaria] Executor sem suporte a writefile/getcustomasset - audio do menu nao sera carregado.")
@@ -486,7 +565,10 @@ local function LoadCustomAudio(url, filename)
     end
 
     local ok, result = pcall(function()
-        local data = game:HttpGet(url)
+        local data = DownloadBinary(url)
+        if not data then
+            error("download falhou")
+        end
         writefile(filename, data)
         return getcustomasset(filename)
     end)
@@ -525,11 +607,6 @@ local SecretariaTab = Window:Tab({ Title = "Secretaria", Icon = "user-round" })
 
 SecretariaTab:Section({ Title = "Atendimento Automatico" })
 
-SecretariaTab:Paragraph({
-    Title = "Como funciona",
-    Desc = "Ao ativar, o script chama pacientes na fila, tira foto, registra no computador e imprime a ficha automaticamente.\nPacientes marcados como Anomalia (pasta Anomalies) sao sinalizados em rosa e NAO sao registrados, para nao deixar nada perigoso entrar."
-})
-
 SecretariaTab:Toggle({
     Title = "Ativar Secretaria Automatica",
     Value = false,
@@ -541,39 +618,6 @@ SecretariaTab:Toggle({
         end
     end
 })
-
-SecretariaTab:Section({ Title = "Status" })
-
-local function BuildStatusText()
-    local status = SecretariaModule:GetStatus()
-    return "Ativo: " .. tostring(status.enabled) .. "\n" ..
-        "Paciente Atual: " .. (status.currentPatient or "Nenhum") .. "\n" ..
-        "Pacientes Atendidos: " .. status.processed .. "\n" ..
-        "Anomalias Barradas: " .. status.anomaliesSkipped
-end
-
-local StatusParagraph = SecretariaTab:Paragraph({
-    Title = "Status Atual",
-    Desc = BuildStatusText()
-})
-
-SecretariaTab:Button({
-    Title = "Atualizar Status",
-    Callback = function()
-        if StatusParagraph and StatusParagraph.SetDesc then
-            StatusParagraph:SetDesc(BuildStatusText())
-        end
-    end
-})
-
-task.spawn(function()
-    while true do
-        task.wait(2)
-        if StatusParagraph and StatusParagraph.SetDesc then
-            StatusParagraph:SetDesc(BuildStatusText())
-        end
-    end
-end)
 
 local PrincipalTab = Window:Tab({ Title = "Principal", Icon = "clipboard-list" })
 PrincipalTab:Paragraph({ Title = "Principal", Desc = "Em desenvolvimento." })
@@ -588,11 +632,6 @@ local VisualTab = Window:Tab({ Title = "Visual", Icon = "eye" })
 
 VisualTab:Section({ Title = "Highlights" })
 
-VisualTab:Paragraph({
-    Title = "Como funciona",
-    Desc = "Enquanto a Secretaria estiver ativa, pacientes e visitantes ficam marcados em verde e anomalias em vermelho. Desative aqui se quiser jogar sem os contornos."
-})
-
 VisualTab:Toggle({
     Title = "Ativar Highlights",
     Value = true,
@@ -604,10 +643,46 @@ VisualTab:Toggle({
 local MiscTab = Window:Tab({ Title = "Misc", Icon = "layers" })
 MiscTab:Paragraph({ Title = "Misc", Desc = "Em desenvolvimento." })
 
+local WHATSAPP_LINK = "https://chat.whatsapp.com/COLOQUE_SEU_LINK_AQUI"
+local DISCORD_LINK = "https://discord.gg/COLOQUE_SEU_LINK_AQUI"
+
 local SobreTab = Window:Tab({ Title = "Sobre", Icon = "info" })
 SobreTab:Paragraph({
     Title = "Receptionist Script V3",
-    Desc = "Biblioteca: WindUI\nModulo ativo: Secretaria (automacao de atendimento)\nDemais modulos (Principal, Utilidades, Player, Misc) serao adicionados nas proximas versoes."
+    Desc = "Criado por FelzpSystem\nBiblioteca: WindUI\nModulo ativo: Secretaria (automacao de atendimento)"
+})
+
+SobreTab:Paragraph({
+    Title = "Comunidade",
+    Desc = "Entre nos nossos grupos para acompanhar atualizacoes, tirar duvidas e sugerir melhorias.",
+    Buttons = {
+        {
+            Title = "Copiar link do WhatsApp",
+            Icon = "message-circle",
+            Variant = "Primary",
+            Callback = function()
+                if typeof(setclipboard) == "function" then
+                    setclipboard(WHATSAPP_LINK)
+                    UI:Notify("WhatsApp", "Link copiado! Cole no navegador.", 3, "success")
+                else
+                    UI:Notify("WhatsApp", WHATSAPP_LINK, 5, "info")
+                end
+            end
+        },
+        {
+            Title = "Copiar link do Discord",
+            Icon = "message-square",
+            Variant = "Primary",
+            Callback = function()
+                if typeof(setclipboard) == "function" then
+                    setclipboard(DISCORD_LINK)
+                    UI:Notify("Discord", "Link copiado! Cole no navegador.", 3, "success")
+                else
+                    UI:Notify("Discord", DISCORD_LINK, 5, "info")
+                end
+            end
+        }
+    }
 })
 
 _G.ReceptionistScript = {
