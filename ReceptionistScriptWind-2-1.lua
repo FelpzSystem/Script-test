@@ -37,6 +37,7 @@ local FindGameElements
 
 local HighlightSystem = {
     ActiveHighlights = {},
+    Enabled = true,
     Settings = {
         VisitorColor = Colors.HighlightVisitor,
         PacienteColor = Colors.HighlightPaciente,
@@ -148,7 +149,9 @@ function HighlightSystem:StartLiveScan()
     HighlightSystem._scanning = true
     task.spawn(function()
         while HighlightSystem._scanning do
-            pcall(function() HighlightSystem:RefreshScan() end)
+            if HighlightSystem.Enabled then
+                pcall(function() HighlightSystem:RefreshScan() end)
+            end
             task.wait(1)
         end
     end)
@@ -157,6 +160,13 @@ end
 function HighlightSystem:StopLiveScan()
     HighlightSystem._scanning = false
     HighlightSystem:ClearAll()
+end
+
+function HighlightSystem:SetEnabled(state)
+    HighlightSystem.Enabled = state
+    if not state then
+        HighlightSystem:ClearAll()
+    end
 end
 
 local UI = {}
@@ -206,70 +216,6 @@ function UI:Flash(duration, color)
     end)
 
     Debris:AddItem(flash, duration + 0.1)
-end
-
-function UI:ProgressBar(text, duration)
-    duration = duration or 3
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "ProgressGui"
-    screenGui.ResetOnSpawn = false
-    screenGui.Parent = PlayerGui
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 300, 0, 60)
-    frame.Position = UDim2.new(0.5, -150, 0.5, -30)
-    frame.BackgroundColor3 = Colors.Primary
-    frame.BorderSizePixel = 0
-    frame.Parent = screenGui
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 10)
-    corner.Parent = frame
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -20, 0, 25)
-    label.Position = UDim2.new(0, 10, 0, 8)
-    label.Text = text
-    label.TextColor3 = Colors.Text
-    label.BackgroundTransparency = 1
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 14
-    label.Parent = frame
-
-    local progressBg = Instance.new("Frame")
-    progressBg.Size = UDim2.new(1, -20, 0, 8)
-    progressBg.Position = UDim2.new(0, 10, 1, -16)
-    progressBg.BackgroundColor3 = Colors.Secondary
-    progressBg.BorderSizePixel = 0
-    progressBg.Parent = frame
-
-    local progressCorner = Instance.new("UICorner")
-    progressCorner.CornerRadius = UDim.new(0, 4)
-    progressCorner.Parent = progressBg
-
-    local progressFill = Instance.new("Frame")
-    progressFill.Size = UDim2.new(0, 0, 1, 0)
-    progressFill.BackgroundColor3 = Colors.Accent
-    progressFill.BorderSizePixel = 0
-    progressFill.Parent = progressBg
-
-    local progressFillCorner = Instance.new("UICorner")
-    progressFillCorner.CornerRadius = UDim.new(0, 4)
-    progressFillCorner.Parent = progressFill
-
-    local tween = TweenService:Create(
-        progressFill,
-        TweenInfo.new(duration, Enum.EasingStyle.Linear),
-        { Size = UDim2.new(1, 0, 1, 0) }
-    )
-    tween:Play()
-
-    tween.Completed:Connect(function()
-        screenGui:Destroy()
-    end)
-
-    Debris:AddItem(screenGui, duration + 0.5)
 end
 
 local PrincipalModule = {}
@@ -342,8 +288,8 @@ local SecretariaModule = {
     Settings = {
         LoopDelay = 1.5,
         ShowNotifications = true,
-        ShowProgress = true,
-        AutoSkipAnomalies = true
+        AutoSkipAnomalies = true,
+        FichaPickupTimeout = 8
     },
     Stats = {
         processed = 0,
@@ -359,9 +305,22 @@ local function IsAnomaly(model)
     return false
 end
 
-local function FirePrompt(container)
+local function WaitAndFire(container, timeout)
     if not container then return false end
-    local prompt = container:FindFirstChildWhichIsA("ProximityPrompt", true)
+    timeout = timeout or 5
+
+    local prompt
+    local elapsed = 0
+
+    repeat
+        prompt = container:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and prompt.Enabled then
+            break
+        end
+        task.wait(0.2)
+        elapsed += 0.2
+    until elapsed >= timeout
+
     if prompt and typeof(fireproximityprompt) == "function" then
         return pcall(fireproximityprompt, prompt)
     end
@@ -416,48 +375,40 @@ local function ProcessPatient(model)
     local isVisitor = model:GetAttribute("SecretariaIsVisitor") == true
 
     if elements.CheckIn then
-        FirePrompt(elements.CheckIn)
+        WaitAndFire(elements.CheckIn, 3)
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Chamando paciente...", 0.6) end
-    task.wait(0.6)
+    task.wait(0.4)
 
     if elements.FormStation then
-        FirePrompt(elements.FormStation)
+        WaitAndFire(elements.FormStation, 3)
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Preenchendo formulario...", 0.6) end
-    task.wait(0.6)
+    task.wait(0.4)
 
     UI:Flash(0.15, Color3.fromRGB(255, 255, 255))
     if elements.Camera then
-        FirePrompt(elements.Camera)
+        WaitAndFire(elements.Camera, 3)
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Tirando foto...", 0.5) end
-    task.wait(0.5)
+    task.wait(0.4)
 
     if elements.Computer then
-        FirePrompt(elements.Computer)
+        WaitAndFire(elements.Computer, 3)
     else
         warn("[Secretaria] Computer nao encontrado em Misc.CheckIn - registro pulado.")
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Registrando no computador...", 1) end
-    task.wait(1)
+    task.wait(0.6)
 
     if elements.Printer then
-        FirePrompt(elements.Printer)
+        WaitAndFire(elements.Printer, 3)
     else
         warn("[Secretaria] Printer nao encontrado em Misc.CheckIn - impressao pulada.")
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Imprimindo ficha...", 1) end
-    task.wait(1)
 
     local badgeBase = isVisitor and elements.VisitorBadge or elements.PatientBadge
     if badgeBase then
-        FirePrompt(badgeBase)
+        WaitAndFire(badgeBase, SecretariaModule.Settings.FichaPickupTimeout)
     else
         warn("[Secretaria] Badge base nao encontrado em Misc.CheckIn - entrega pulada.")
     end
-    if SecretariaModule.Settings.ShowProgress then UI:ProgressBar("Entregando ficha ao paciente...", 0.6) end
-    task.wait(0.6)
 
     model:SetAttribute("SecretariaProcessed", true)
     SecretariaModule.Stats.processed += 1
@@ -528,12 +479,47 @@ function SecretariaModule:GetStatus()
     }
 end
 
+local function LoadCustomAudio(url, filename)
+    if typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then
+        warn("[Secretaria] Executor sem suporte a writefile/getcustomasset - audio do menu nao sera carregado.")
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        local data = game:HttpGet(url)
+        writefile(filename, data)
+        return getcustomasset(filename)
+    end)
+
+    if ok then return result end
+    warn("[Secretaria] Falha ao carregar audio do menu: " .. tostring(result))
+    return nil
+end
+
+local function PlayMenuAudio()
+    local soundId = LoadCustomAudio("https://files.catbox.moe/llgli8.mp3", "receptionist_menu_audio.mp3")
+    if not soundId then return end
+
+    local sound = Instance.new("Sound")
+    sound.Name = "MenuOpenSound"
+    sound.SoundId = soundId
+    sound.Volume = 1
+    sound.Parent = PlayerGui
+
+    sound:Play()
+    sound.Ended:Connect(function()
+        sound:Destroy()
+    end)
+end
+
 local Window = WindUI:CreateWindow({
     Title = "Receptionist Script V3",
-    Icon = "hospital",
+    Icon = "https://files.catbox.moe/4guca7.jpg",
     Folder = "ReceptionistScriptV3",
     Theme = "Dark"
 })
+
+PlayMenuAudio()
 
 local SecretariaTab = Window:Tab({ Title = "Secretaria", Icon = "user-round" })
 
@@ -553,41 +539,6 @@ SecretariaTab:Toggle({
         else
             SecretariaModule:Stop()
         end
-    end
-})
-
-SecretariaTab:Section({ Title = "Configuracoes" })
-
-SecretariaTab:Slider({
-    Title = "Intervalo entre pacientes (s)",
-    Value = { Min = 1, Max = 10, Default = 1.5 },
-    Callback = function(value)
-        SecretariaModule.Settings.LoopDelay = value
-    end
-})
-
-SecretariaTab:Toggle({
-    Title = "Pular Anomalias Automaticamente",
-    Desc = "Recomendado manter ativado",
-    Value = true,
-    Callback = function(state)
-        SecretariaModule.Settings.AutoSkipAnomalies = state
-    end
-})
-
-SecretariaTab:Toggle({
-    Title = "Mostrar Notificacoes",
-    Value = true,
-    Callback = function(state)
-        SecretariaModule.Settings.ShowNotifications = state
-    end
-})
-
-SecretariaTab:Toggle({
-    Title = "Mostrar Progresso",
-    Value = true,
-    Callback = function(state)
-        SecretariaModule.Settings.ShowProgress = state
     end
 })
 
@@ -632,6 +583,23 @@ UtilidadesTab:Paragraph({ Title = "Utilidades", Desc = "Em desenvolvimento." })
 
 local PlayerTab = Window:Tab({ Title = "Player", Icon = "user" })
 PlayerTab:Paragraph({ Title = "Player", Desc = "Em desenvolvimento." })
+
+local VisualTab = Window:Tab({ Title = "Visual", Icon = "eye" })
+
+VisualTab:Section({ Title = "Highlights" })
+
+VisualTab:Paragraph({
+    Title = "Como funciona",
+    Desc = "Enquanto a Secretaria estiver ativa, pacientes e visitantes ficam marcados em verde e anomalias em vermelho. Desative aqui se quiser jogar sem os contornos."
+})
+
+VisualTab:Toggle({
+    Title = "Ativar Highlights",
+    Value = true,
+    Callback = function(state)
+        HighlightSystem:SetEnabled(state)
+    end
+})
 
 local MiscTab = Window:Tab({ Title = "Misc", Icon = "layers" })
 MiscTab:Paragraph({ Title = "Misc", Desc = "Em desenvolvimento." })
