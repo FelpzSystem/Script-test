@@ -29,9 +29,16 @@ if not WindUI.CreateWindow and type(WindUI.Window) == "function" then
 end
 
 local function W_CreateWindow(opts)
-    if WindUI.CreateWindow then return WindUI.CreateWindow(opts) end
-    if type(WindUI.Window) == "function" then return WindUI.Window(opts) end
-    if type(WindUI.New) == "function" then return WindUI.New(opts) end
+    -- API nova do WindUI: WindUI:CreateWindow(opts)
+    if type(WindUI.CreateWindow) == "function" then
+        return WindUI:CreateWindow(opts)
+    end
+    if type(WindUI.Window) == "function" then
+        return WindUI.Window(opts)
+    end
+    if type(WindUI.New) == "function" then
+        return WindUI.New(opts)
+    end
     error("WindUI nao expoe CreateWindow/Window/New")
 end
 
@@ -1737,12 +1744,35 @@ end
 local Window
 local okW, errW = pcall(function()
     Window = W_CreateWindow({
-        Title  = "Solix Hub — Receptionist V4",
-        Icon   = IconURL,
-        Folder = "SolixHubReceptionistV4",
-        Theme  = "Dark",
-        Size   = UDim2.fromOffset(620, 480),
-        User   = { Enabled = true, Anonymous = false },
+        Title    = "Solix Hub — Receptionist V4",
+        Icon     = IconURL,                    -- pode ser URL, rbxassetid:// ou lucide
+        Author   = "FelzpSystem",              -- subtitulo da janela
+        Folder   = "SolixHubReceptionistV4",   -- onde salva keys/imagens
+
+        Size     = UDim2.fromOffset(620, 480),
+        MinSize  = Vector2.new(560, 360),
+        MaxSize  = Vector2.new(900, 620),
+        Resizable = true,
+        Transparent = true,
+
+        Theme    = "Dark",
+        SideBarWidth = 200,
+        HideSearchBar = false,
+        ScrollBarEnabled = false,
+
+        BackgroundImageTransparency = 0.42,
+        -- Background = "rbxassetid://1234",  -- opcional, deixa comentado
+
+        User = {
+            Enabled   = true,
+            Anonymous = false,
+            Callback  = function()
+                print("[SolixHub] user icon clicado")
+            end,
+        },
+
+        -- KeySystem desligado (script publico)
+        -- KeySystem = { ... },
     })
 end)
 
