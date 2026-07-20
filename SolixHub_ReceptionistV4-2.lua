@@ -1144,10 +1144,10 @@ function ShiftModule:Start()
                 pcall(function()
                     local els = FindGameElements()
                     if els.Rooms then
-                        for _, room in ipairs(els.Rooms:GetDescendants()) do
+                        for _, f in ipairs(els.Rooms:GetDescendants()) do
                             -- só apaga Fire que esteja dentro de Rooms
-                            if d and d:IsA("Fire") and d:IsDescendantOf(els.Rooms) then
-                                pcall(function() d:Destroy() end)
+                            if f and f:IsA("Fire") then
+                                pcall(function() f:Destroy() end)
                             end
                         end
                     end
@@ -1532,8 +1532,9 @@ end
 function PlayerModule:StartNoclip()
     if self.State.Running then return end
     self.State.Running = true
+    local noclipFlag = self.Settings.Noclip
     self.State._noclipConn = RunService.Stepped:Connect(function()
-        if not self.Settings.Noclip then return end
+        if not noclipFlag then return end
         pcall(function()
             local c = LocalPlayer.Character
             if c then
@@ -1542,6 +1543,13 @@ function PlayerModule:StartNoclip()
                 end
             end
         end)
+    end)
+    -- atualiza o flag quando o user mexer no toggle
+    task.spawn(function()
+        while self.State.Running do
+            noclipFlag = self.Settings.Noclip
+            task.wait(0.5)
+        end
     end)
 end
 
