@@ -1479,7 +1479,7 @@ function CreepsModule:Tick()
             if liz then
                 local anchor = GetAnchorPart(liz)
                 if anchor and (root.Position - anchor.Position).Magnitude < 5 then
-                    FireClick(liz) or FireProximity(liz, 2)
+                    if not FireClick(liz) then FireProximity(liz, 2) end
                 end
             end
         end
