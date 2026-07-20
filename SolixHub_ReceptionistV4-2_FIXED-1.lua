@@ -12,11 +12,18 @@
 --------------------------------------------------------------------------------
 -- 0) CARREGAR WINDUI COM PROTECAO
 --------------------------------------------------------------------------------
-local ok, WindUI = pcall(function()
-    return loadstring(game:HttpGet(
-        "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
-    ))()
-end)
+local WINDUI_URLS = {
+    "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua",
+    "https://raw.githubusercontent.com/Footagesus/WindUI/main/main.lua",
+}
+
+local ok, WindUI
+for _, url in ipairs(WINDUI_URLS) do
+    ok, WindUI = pcall(function()
+        return loadstring(game:HttpGet(url))()
+    end)
+    if ok and type(WindUI) == "table" then break end
+end
 
 if not ok or type(WindUI) ~= "table" then
     warn("[SolixHub] Falha ao carregar WindUI: " .. tostring(WindUI))
@@ -182,12 +189,10 @@ local function DownloadBinary(url)
         local ok, res = pcall(http_request, {Url = url, Method = "GET"})
         if ok and res and res.Body and #tostring(res.Body) > 50 then return res.Body end
     end
-    pcall(function()
-        if typeof(game.HttpGet) == "function" then
-            local ok, data = pcall(game.HttpGet, game, url)
-            if ok and data and #data > 50 then return data end
-        end
-    end)
+    if typeof(game.HttpGet) == "function" then
+        local ok, data = pcall(game.HttpGet, game, url)
+        if ok and data and #tostring(data) > 50 then return data end
+    end
     return nil
 end
 
@@ -316,15 +321,28 @@ local function FindGameElements()
             elements.Printer      = elements.CheckIn:FindFirstChild("Printer")
             elements.PatientBadge = elements.CheckIn:FindFirstChild("PatientBadgeBase")
             elements.VisitorBadge = elements.CheckIn:FindFirstChild("VisitorBadgeBase")
+            -- Form do check-in normal (usado no atendimento do dia-a-dia)
+            elements.FormStation  = elements.CheckIn:FindFirstChild("Form")
+        end
+        if elements.CheckIn2 then
+            elements.FormStation2 = elements.CheckIn2:FindFirstChild("Form")
         end
 
         if not elements.Computer then elements.Computer = misc:FindFirstChild("Computer") end
         if not elements.Printer  then elements.Printer  = misc:FindFirstChild("Printer")  end
     end
 
+    -- CoffeeMachine2 mora em ReplicatedStorage.Misc no jogo real (nao Workspace.Misc) - fallback
+    if not elements.CoffeeMachine2 and ReplicatedStorage:FindFirstChild("Misc") then
+        elements.CoffeeMachine2 = ReplicatedStorage.Misc:FindFirstChild("CoffeeMachine2")
+    end
+
     if ReplicatedStorage:FindFirstChild("Misc") then
         local misc = ReplicatedStorage.Misc
-        elements.FormStation = misc:FindFirstChild("Form") or misc:FindFirstChild("HazmatForm")
+        -- so usa o HazmatForm da ReplicatedStorage se nao achou o Form normal do CheckIn
+        if not elements.FormStation then
+            elements.FormStation = misc:FindFirstChild("Form") or misc:FindFirstChild("HazmatForm")
+        end
     end
 
     if Workspace:FindFirstChild("NPCs")   then elements.NPCs   = Workspace.NPCs   end
@@ -771,14 +789,25 @@ local SecretariaModule = {
     Stats = { processed = 0 },
 }
 
+local function IsAnomaliaName(name)
+    local lower = (name or ""):lower()
+    for _, kw in ipairs(ANOMALIA_KEYWORDS) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
 local function GetWaitingNPCs()
     local waiting = {}
     local els = FindGameElements()
     if not els.NPCs then return waiting end
     for _, child in ipairs(els.NPCs:GetChildren()) do
         if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
-            if not ProcessedRegistry[child] and not SecretariaModule.State.InProgress[child] then
-                table.insert(waiting, child)
+            -- NUNCA trata anomalias/monstros como paciente (evita ir na direcao de um Ghost/Skinwalker/etc)
+            if not IsAnomaliaName(child.Name) then
+                if not ProcessedRegistry[child] and not SecretariaModule.State.InProgress[child] then
+                    table.insert(waiting, child)
+                end
             end
         end
     end
@@ -1118,8 +1147,10 @@ local ShiftModule = {
     State = { Running = false },
 }
 
+local _shiftRemoteWarned = false
 function ShiftModule:StartShift()
     -- alvo: só RemoteEvents que combinam "start" e "shift" juntos
+    local found = false
     pcall(function()
         for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
             if d:IsA("RemoteEvent") then
@@ -1127,10 +1158,16 @@ function ShiftModule:StartShift()
                 if (n:find("start") and n:find("shift"))
                     or n == "startshift" or n == "beginshift" then
                     d:FireServer()
+                    found = true
                 end
             end
         end
     end)
+    if not found and not _shiftRemoteWarned then
+        _shiftRemoteWarned = true
+        warn("[SolixHub] Auto Shift: nenhum RemoteEvent 'start+shift' encontrado neste jogo. Essa funcao nao tem efeito na versao atual do mapa.")
+        UI:Notify("Auto Shift", "Nenhum evento de shift encontrado neste jogo. Feature sem efeito.", 4, "warning")
+    end
 end
 
 function ShiftModule:Start()
@@ -1145,8 +1182,8 @@ function ShiftModule:Start()
                     local els = FindGameElements()
                     if els.Rooms then
                         for _, f in ipairs(els.Rooms:GetDescendants()) do
-                            -- só apaga Fire que esteja dentro de Rooms
-                            if f and f:IsA("Fire") then
+                            -- no jogo real o fogo e um Model chamado "Fire" (nao a classe nativa Fire)
+                            if f and (f:IsA("Model") or f:IsA("Folder")) and f.Name == "Fire" then
                                 pcall(function() f:Destroy() end)
                             end
                         end
@@ -1753,7 +1790,7 @@ local Window
 local okW, errW = pcall(function()
     Window = W_CreateWindow({
         Title    = "Solix Hub — Receptionist V4",
-        Icon     = IconURL,                    -- pode ser URL, rbxassetid:// ou lucide
+        Icon     = "door-open",                -- icone lucide nativo (nao depende de rede, mais confiavel em mobile)
         Author   = "FelzpSystem",              -- subtitulo da janela
         Folder   = "SolixHubReceptionistV4",   -- onde salva keys/imagens
 
@@ -1813,29 +1850,65 @@ PrincipalTab:Paragraph({
 })
 
 PrincipalTab:Section({Title = "Status da Sessao"})
-PrincipalTab:Paragraph({
+
+local function BuildSecretariaDesc()
+    local s = SecretariaModule:GetStatus()
+    return string.format(
+        "Estado: %s\nProcessados: %d\nAtual: %s",
+        s.enabled and "ATIVA" or "parada",
+        s.processed,
+        s.current or "-"
+    )
+end
+
+local function BuildInfoDesc()
+    return string.format(
+        "Deaths: %d\nSkinwalkers no mapa: %d\nShift atual: %s",
+        InfoModule.State.DeathCount,
+        InfoModule.State.Skinwalkers,
+        tostring(InfoModule.State.CurrentShift)
+    )
+end
+
+local SecretariaParagraph = PrincipalTab:Paragraph({
     Title = "Secretaria",
-    Desc  = function()
-        local s = SecretariaModule:GetStatus()
-        return string.format(
-            "Estado: %s\nProcessados: %d\nAtual: %s",
-            s.enabled and "ATIVA" or "parada",
-            s.processed,
-            s.current or "—"
-        )
-    end,
+    Desc  = BuildSecretariaDesc(), -- string estatica na criacao (WindUI nao aceita function aqui)
 })
-PrincipalTab:Paragraph({
+local InfoParagraph = PrincipalTab:Paragraph({
     Title = "Info do Jogo",
-    Desc  = function()
-        return string.format(
-            "Deaths: %d\nSkinwalkers no mapa: %d\nShift atual: %s",
-            InfoModule.State.DeathCount,
-            InfoModule.State.Skinwalkers,
-            tostring(InfoModule.State.CurrentShift)
-        )
-    end,
+    Desc  = BuildInfoDesc(),
 })
+
+-- Atualiza os dois paragraphs periodicamente de forma segura (sem quebrar se a API nao suportar)
+task.spawn(function()
+    while true do
+        task.wait(2)
+        pcall(function()
+            if SecretariaParagraph then
+                local newDesc = BuildSecretariaDesc()
+                if type(SecretariaParagraph.SetDesc) == "function" then
+                    SecretariaParagraph:SetDesc(newDesc)
+                elseif type(SecretariaParagraph.Set) == "function" then
+                    SecretariaParagraph:Set({Desc = newDesc})
+                elseif SecretariaParagraph.Desc ~= nil then
+                    SecretariaParagraph.Desc = newDesc
+                end
+            end
+        end)
+        pcall(function()
+            if InfoParagraph then
+                local newDesc = BuildInfoDesc()
+                if type(InfoParagraph.SetDesc) == "function" then
+                    InfoParagraph:SetDesc(newDesc)
+                elseif type(InfoParagraph.Set) == "function" then
+                    InfoParagraph:Set({Desc = newDesc})
+                elseif InfoParagraph.Desc ~= nil then
+                    InfoParagraph.Desc = newDesc
+                end
+            end
+        end)
+    end
+end)
 
 PrincipalTab:Section({Title = "Atalhos Rapidos"})
 PrincipalTab:Toggle({
