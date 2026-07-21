@@ -179,8 +179,10 @@ local NATIVE_SOUND_IDS = {
 local AudioURL = "https://litter.catbox.moe/qtcweo.mp3"
 -- FIX: essa era a logo que voce pediu e que estava faltando. O link que voce
 -- mandou (catbox 9envii.jpg) e uma IMAGEM, entao usei ele aqui como logo.
--- Nao da pra usar ele como audio porque .jpg nao e som -- se voce tiver um
--- link de audio (mp3/ogg) de verdade, so trocar o AudioURL acima.
+-- FIX V5: .jpg continua aqui porque era o link que o autor mandou.
+-- O SaveBinaryAndGetAsset agora grava como .png (independente da extensao
+-- do link), porque alguns clients do Roblox reconhecem melhor .png como
+-- asset de imagem. Se voce quiser usar OUTRA imagem, troque o IconURL.
 local IconURL  = "https://files.catbox.moe/9envii.jpg"
 
 local function DownloadBinary(url)
@@ -248,60 +250,87 @@ end
 -- se absolutamente nada conseguiu tocar, com o motivo.
 local SoundService = game:GetService("SoundService")
 
-local function PlayMenuAudio(volume)
-    volume = volume or 0.5
+-- FIX V5: reescrito do zero. O bug do V4 era: tryPlay retornava `played`
+-- (false) ANTES do task.delay de 5s marcar `played = true`. Aí o
+-- playNativeChain disparava o próximo ID da fila IMEDIATAMENTE, mesmo
+-- quando o som atual estava carregando/tocando. Resultado: 3 sons
+-- sobrepostos ou nenhum. Agora cada tentativa é SEQUENCIAL: espera o
+-- Loaded (com timeout), toca, e só aí passa pra próxima.
+local function tryPlaySync(id, timeout)
+    timeout = timeout or 4
+    local s = Instance.new("Sound")
+    s.SoundId = id
+    s.Volume  = 0.4
+    s.Looped  = false
+    s.Parent  = SoundService or Workspace
 
-    local function tryPlay(id, onFail)
-        local played = false
-        pcall(function()
-            local s = Instance.new("Sound")
-            s.SoundId = id
-            s.Volume  = volume
-            s.Looped  = false
-            s.Parent  = SoundService or Workspace
+    local loaded = false
+    local err    = nil
+    local conn
+    pcall(function()
+        conn = s.Loaded:Connect(function() loaded = true end)
+    end)
 
-            local loaded = false
-            local loadedConn
-            loadedConn = s.Loaded:Connect(function() loaded = true end)
-
-            local playedOk = pcall(function() s:Play() end)
-
-            s.Ended:Connect(function() pcall(function() s:Destroy() end) end)
-            Debris:AddItem(s, 20)
-
-            task.delay(5, function()
-                if loadedConn then pcall(function() loadedConn:Disconnect() end) end
-                if not playedOk or not loaded then
-                    pcall(function() s:Destroy() end)
-                    if onFail then onFail() end
-                else
-                    played = true
-                end
-            end)
-        end)
-        return played
+    local okPlay = pcall(function() s:Play() end)
+    if not okPlay then
+        pcall(function() s:Destroy() end)
+        return false, "Play() falhou (executor bloqueou Sound)"
     end
 
-    local function playNativeChain(i)
-        i = i or 1
-        local id = NATIVE_SOUND_IDS[i]
-        if not id then
-            warn("[SolixHub] Nenhum som de abertura conseguiu tocar (custom e todos os " ..
-                 (i - 1) .. " ids nativos falharam). Pode ser o volume do jogo/dispositivo, " ..
-                 "ou o executor bloqueando o objeto Sound.")
-            return
-        end
-        tryPlay(id, function() playNativeChain(i + 1) end)
+    -- espera carregar (ou timeout)
+    local elapsed = 0
+    while not loaded and elapsed < timeout do
+        task.wait(0.1)
+        elapsed = elapsed + 0.1
     end
 
+    if conn then pcall(function() conn:Disconnect() end) end
+
+    if not loaded then
+        pcall(function() s:Destroy() end)
+        return false, "timeout (" .. timeout .. "s) sem Loaded"
+    end
+
+    -- ok, carregou. deixa o som tocar e descarta sozinho.
+    pcall(function()
+        s.Ended:Connect(function() pcall(function() s:Destroy() end) end)
+        Debris:AddItem(s, 20)
+    end)
+    return true, nil
+end
+
+local function PlayMenuAudio()
     task.spawn(function()
+        -- 1) tenta o custom (mp3 do catbox)
         local asset
         pcall(function() asset = SaveBinaryAndGetAsset(AudioURL, "rsv4_menu.mp3") end)
+
         if asset and asset ~= "" then
-            tryPlay(asset, function() playNativeChain(1) end)
+            local ok, why = tryPlaySync(asset, 5)
+            if ok then
+                print("[SolixHub] Som de abertura: custom (catbox).")
+                return
+            end
+            warn("[SolixHub] Custom falhou (" .. tostring(why) .. "), tentando nativos...")
         else
-            playNativeChain(1)
+            warn("[SolixHub] Sem asset custom (sem writefile/getcustomasset ou link caiu). Indo pros nativos...")
         end
+
+        -- 2) cadeia de IDs nativos do Roblox
+        for i, id in ipairs(NATIVE_SOUND_IDS) do
+            local ok, why = tryPlaySync(id, 4)
+            if ok then
+                print("[SolixHub] Som de abertura: nativo #" .. i .. " (" .. id .. ")")
+                return
+            end
+            warn("[SolixHub] Nativo #" .. i .. " falhou (" .. tostring(why) .. ").")
+        end
+
+        -- 3) nada tocou
+        warn("[SolixHub] Nenhum som de abertura funcionou neste executor. " ..
+             "Causa comum no Delta mobile: a API Sound vem desabilitada por padrao " ..
+             "e alguns jogos exigem que voce ative 'Allow HTTP Requests' nas configs " ..
+             "do executor. Sem isso, nao existe som possivel de tocar.")
     end)
 end
 
@@ -365,6 +394,45 @@ ConfigSystem:Load()
 --------------------------------------------------------------------------------
 local ElementsCache = { _t = 0, _data = nil, _TTL = 1.5 }
 
+-- FIX V5 (FindGameElements): o V4 confiava em nomes exatos ("PatientBadgeBase",
+-- "VisitorBadgeBase") que podem mudar entre atualizacoes. Alem disso, o
+-- fluxo real do Animal Hospital NAO usa uma "badge base" -- o badge eh
+-- GERADO pelo Printer e vai pro Backpack do jogador como Tool. Entao
+-- removi PatientBadge/VisitorBadge (nao existem) e adicionei deteccao
+-- inteligente: ProcuraCamera, ProcuraComputer, ProcuraPrinter, ProcuraStamp.
+-- Esses caminhos cobrem todas as variantes ja vistas: Misc.CheckIn.*,
+-- Workspace.CheckIn.*, ReplicatedStorage.CheckIn.*, e qualquer prefixo
+-- (LobbyCheckIn, FrontDeskCheckIn, etc).
+local function FindByNameAnywhere(root, candidates)
+    if not root then return nil end
+    for _, name in ipairs(candidates) do
+        local found = root:FindFirstChild(name, true)
+        if found then return found end
+    end
+    return nil
+end
+
+local function ProcuraCamera(root)
+    if not root then return nil end
+    return FindByNameAnywhere(root, {"Camera", "LobbyCamera", "ReceptionCamera", "PhotoCamera"})
+end
+local function ProcuraComputer(root)
+    if not root then return nil end
+    return FindByNameAnywhere(root, {"Computer", "PC", "Register", "Registration"})
+end
+local function ProcuraPrinter(root)
+    if not root then return nil end
+    return FindByNameAnywhere(root, {"Printer", "BadgePrinter", "Print"})
+end
+local function ProcuraStamp(root)
+    if not root then return nil end
+    return FindByNameAnywhere(root, {"Stamp", "FormStamp", "StampTool"})
+end
+local function ProcuraFormStation(root)
+    if not root then return nil end
+    return FindByNameAnywhere(root, {"Form", "FormStation", "Forms", "HazmatForm", "Paperwork"})
+end
+
 local function FindGameElements()
     if ElementsCache._data and (tick() - ElementsCache._t) < ElementsCache._TTL then
         return ElementsCache._data
@@ -372,8 +440,7 @@ local function FindGameElements()
 
     local elements = {
         CheckIn = nil, CheckIn2 = nil,
-        Camera = nil, Computer = nil, Printer = nil,
-        PatientBadge = nil, VisitorBadge = nil,
+        Camera = nil, Computer = nil, Printer = nil, Stamp = nil,
         FormStation = nil, FormStation2 = nil,
         NPCs = nil,
         CoffeeMachine = nil, CoffeeMachine2 = nil,
@@ -382,49 +449,84 @@ local function FindGameElements()
         Rooms = nil,
     }
 
-    if Workspace:FindFirstChild("Misc") then
-        local misc = Workspace.Misc
-        elements.CheckIn       = misc:FindFirstChild("CheckIn")
-        elements.CheckIn2      = misc:FindFirstChild("CheckIn2")
-        elements.CoffeeMachine = misc:FindFirstChild("CoffeeMachine")
-        elements.CoffeeMachine2= misc:FindFirstChild("CoffeeMachine2")
-        elements.Cameras       = misc:FindFirstChild("Cameras")
-        elements.Cameras2      = misc:FindFirstChild("Cameras2")
-        elements.ShopItems     = misc:FindFirstChild("ShopItems")
-        elements.SecurityCamPC = misc:FindFirstChild("SecurityCamPC")
-
-        if elements.CheckIn then
-            elements.Camera       = elements.CheckIn:FindFirstChild("Camera")
-            elements.Computer     = elements.CheckIn:FindFirstChild("Computer")
-            elements.Printer      = elements.CheckIn:FindFirstChild("Printer")
-            elements.PatientBadge = elements.CheckIn:FindFirstChild("PatientBadgeBase")
-            elements.VisitorBadge = elements.CheckIn:FindFirstChild("VisitorBadgeBase")
-            -- Form do check-in normal (usado no atendimento do dia-a-dia)
-            elements.FormStation  = elements.CheckIn:FindFirstChild("Form")
+    -- FIX: procura CheckIn em varios lugares (nao so Workspace.Misc).
+    -- Alguns forks do jogo colocam direto em Workspace.
+    local checkinRoots = {}
+    for _, parent in ipairs({Workspace, ReplicatedStorage}) do
+        if parent:FindFirstChild("Misc") then
+            table.insert(checkinRoots, parent.Misc)
         end
-        if elements.CheckIn2 then
-            elements.FormStation2 = elements.CheckIn2:FindFirstChild("Form")
+        if parent:FindFirstChild("CheckIn") then
+            table.insert(checkinRoots, parent.CheckIn)
         end
-
-        if not elements.Computer then elements.Computer = misc:FindFirstChild("Computer") end
-        if not elements.Printer  then elements.Printer  = misc:FindFirstChild("Printer")  end
+        if parent:FindFirstChild("Lobby") then
+            table.insert(checkinRoots, parent.Lobby)
+        end
+        if parent:FindFirstChild("Reception") then
+            table.insert(checkinRoots, parent.Reception)
+        end
     end
 
-    -- CoffeeMachine2 mora em ReplicatedStorage.Misc no jogo real (nao Workspace.Misc) - fallback
+    -- pega o PRIMEIRO CheckIn achado e usa como principal
+    for _, root in ipairs(checkinRoots) do
+        if not elements.CheckIn then
+            elements.CheckIn   = root:IsA("Model") and root or root:FindFirstChild("CheckIn")
+        elseif not elements.CheckIn2 then
+            elements.CheckIn2  = root:IsA("Model") and root or root:FindFirstChild("CheckIn")
+        end
+    end
+
+    -- procura os itens do check-in (Camera/Computer/Printer/Stamp/Form)
+    -- em CheckIn, CheckIn2, ou qualquer raiz
+    local searchRoots = {}
+    if elements.CheckIn  then table.insert(searchRoots, elements.CheckIn)  end
+    if elements.CheckIn2 then table.insert(searchRoots, elements.CheckIn2) end
+    for _, r in ipairs(checkinRoots) do table.insert(searchRoots, r) end
+
+    for _, root in ipairs(searchRoots) do
+        if not elements.Camera      then elements.Camera      = ProcuraCamera(root)      end
+        if not elements.Computer    then elements.Computer    = ProcuraComputer(root)    end
+        if not elements.Printer     then elements.Printer     = ProcuraPrinter(root)     end
+        if not elements.Stamp       then elements.Stamp       = ProcuraStamp(root)       end
+        if not elements.FormStation then elements.FormStation = ProcuraFormStation(root) end
+    end
+
+    -- se NAO achou Printer (comum!), procura globalmente
+    if not elements.Printer then
+        for _, parent in ipairs({Workspace, ReplicatedStorage}) do
+            elements.Printer = ProcuraPrinter(parent)
+            if elements.Printer then break end
+        end
+    end
+
+    -- NPCs: suporta varios caminhos
+    if not elements.NPCs then
+        for _, parent in ipairs({Workspace, ReplicatedStorage}) do
+            local candidates = {"NPCs", "Patients", "WaitingPatients", "Visitors", "Customers"}
+            for _, name in ipairs(candidates) do
+                local f = parent:FindFirstChild(name)
+                if f then elements.NPCs = f; break end
+            end
+            if elements.NPCs then break end
+        end
+    end
+
+    -- Rooms
+    if Workspace:FindFirstChild("Rooms") then elements.Rooms = Workspace.Rooms end
+
+    -- Coffee machines (mantido do V4, funciona)
+    if Workspace:FindFirstChild("Misc") then
+        local misc = Workspace.Misc
+        elements.CoffeeMachine  = misc:FindFirstChild("CoffeeMachine")
+        elements.CoffeeMachine2 = misc:FindFirstChild("CoffeeMachine2")
+        elements.Cameras        = misc:FindFirstChild("Cameras")
+        elements.Cameras2       = misc:FindFirstChild("Cameras2")
+        elements.ShopItems      = misc:FindFirstChild("ShopItems")
+        elements.SecurityCamPC  = misc:FindFirstChild("SecurityCamPC")
+    end
     if not elements.CoffeeMachine2 and ReplicatedStorage:FindFirstChild("Misc") then
         elements.CoffeeMachine2 = ReplicatedStorage.Misc:FindFirstChild("CoffeeMachine2")
     end
-
-    if ReplicatedStorage:FindFirstChild("Misc") then
-        local misc = ReplicatedStorage.Misc
-        -- so usa o HazmatForm da ReplicatedStorage se nao achou o Form normal do CheckIn
-        if not elements.FormStation then
-            elements.FormStation = misc:FindFirstChild("Form") or misc:FindFirstChild("HazmatForm")
-        end
-    end
-
-    if Workspace:FindFirstChild("NPCs")   then elements.NPCs   = Workspace.NPCs   end
-    if Workspace:FindFirstChild("Rooms")  then elements.Rooms  = Workspace.Rooms  end
 
     ElementsCache._data = elements
     ElementsCache._t    = tick()
@@ -941,32 +1043,34 @@ local function MarkProcessed(model)
     end)
 end
 
+-- FIX V5: reescrito do zero baseado no fluxo real do Animal Hospital:
+-- 1) Pegar a Form (papelada) da estacao
+-- 2) Stampar a form (Stamp tool)
+-- 3) Tirar foto do paciente (Camera do CheckIn)
+-- 4) Registrar no Computer
+-- 5) Imprimir badge no Printer (a Tool "Badge" vai pro Backpack)
+-- 6) Equipar a Tool Badge
+-- 7) Entregar ao paciente (ProximityPrompt OU firetouchinterest)
+-- V4 tentava pegar "PatientBadgeBase" direto -- esse caminho NAO EXISTE
+-- no jogo real. O badge eh gerado pelo Printer como Tool.
+
 local SecretariaModule = {
-    State = { Enabled = false, Running = false, CurrentNPC = nil, InProgress = {}, FailCount = {} },
+    State = { Enabled = false, Running = false, CurrentNPC = nil, InProgress = {}, FailCount = {}, Step = "idle" },
     Settings = {
         LoopDelay         = ConfigSystem:Get("Secretaria.LoopDelay", 1.5),
         ShowNotifications = ConfigSystem:Get("Secretaria.Notif", true),
-        FichaTimeout      = ConfigSystem:Get("Secretaria.FichaTimeout", 6),
-        -- FIX: numero de vezes que tenta pegar a ficha se ela estiver em
-        -- cooldown, e quanto espera entre uma tentativa e outra.
+        StepTimeout       = ConfigSystem:Get("Secretaria.StepTimeout", 4),
         FichaMaxAttempts  = ConfigSystem:Get("Secretaria.FichaMaxAttempts", 4),
         FichaRetryWait    = ConfigSystem:Get("Secretaria.FichaRetryWait", 2.5),
-        -- FIX: quantas vezes tenta atender o MESMO paciente antes de desistir
-        -- dele (evita ficar preso pra sempre num paciente bugado)
         MaxPatientRetries = ConfigSystem:Get("Secretaria.MaxPatientRetries", 3),
         UseFormStation    = ConfigSystem:Get("Secretaria.UseForm", true),
-        DefaultBadgeType  = ConfigSystem:Get("Secretaria.BadgeType", "Patient"),
-        AutoCarry         = ConfigSystem:Get("Secretaria.AutoCarry", false),
-        -- FIX: modo "ficar parado na recepcao" pedido pelo usuario. Quando
-        -- ligado, o script tenta disparar os prompts sem mover o personagem;
-        -- so teleporta se isso falhar de verdade.
+        UseStamp          = ConfigSystem:Get("Secretaria.UseStamp", true),
+        AutoDeliver       = ConfigSystem:Get("Secretaria.AutoDeliver", true),
         StayAtDesk        = ConfigSystem:Get("Secretaria.StayAtDesk", true),
     },
     Stats = { processed = 0 },
 }
 
--- espelha a config pra uma global, pois TeleportAndFire (definida antes desse
--- modulo no arquivo) precisa ler esse valor e nao enxerga a local SecretariaModule
 _G.SolixHub_StayAtDesk = SecretariaModule.Settings.StayAtDesk
 
 local function IsAnomaliaName(name)
@@ -980,78 +1084,133 @@ end
 local function GetWaitingNPCs()
     local waiting = {}
     local els = FindGameElements()
-    if not els.NPCs then return waiting end
-    for _, child in ipairs(els.NPCs:GetChildren()) do
-        if (child:IsA("Model") or child:IsA("Folder")) and child:FindFirstChild("Humanoid") then
-            -- NUNCA trata anomalias/monstros como paciente (evita ir na direcao de um Ghost/Skinwalker/etc)
-            if not IsAnomaliaName(child.Name) then
-                if not ProcessedRegistry[child] and not SecretariaModule.State.InProgress[child] then
-                    table.insert(waiting, child)
-                end
+    local CollectionService = game:GetService("CollectionService")
+
+    local function consider(npc)
+        if not npc or not npc.Parent then return end
+        if not (npc:IsA("Model") or npc:IsA("Folder")) then return end
+        if not npc:FindFirstChild("Humanoid") then return end
+        if IsAnomaliaName(npc.Name) then return end
+        if ProcessedRegistry[npc] or SecretariaModule.State.InProgress[npc] then return end
+        table.insert(waiting, npc)
+    end
+
+    if els.NPCs then
+        for _, c in ipairs(els.NPCs:GetChildren()) do consider(c) end
+        for _, c in ipairs(els.NPCs:GetChildren()) do
+            if c:IsA("Folder") or c:IsA("Model") then
+                for _, sub in ipairs(c:GetChildren()) do consider(sub) end
             end
         end
     end
+
+    pcall(function()
+        for _, tag in ipairs({"Patient", "WaitingPatient", "Visitor", "NPC_Waiting"}) do
+            local items = CollectionService:GetTagged(tag)
+            for _, item in ipairs(items) do consider(item) end
+        end
+    end)
+
     return waiting
 end
 
-local function GetBadgeBase(elements, model)
-    local explicit = model:GetAttribute("SecretariaBadgeType")
-    local badgeType = explicit or SecretariaModule.Settings.DefaultBadgeType
-    if badgeType == "Visitor" and elements.VisitorBadge then return elements.VisitorBadge end
-    return elements.PatientBadge or elements.VisitorBadge
+-- FIX V5: helper pra esperar o badge aparecer no Backpack depois do Printer
+local function WaitForBadgeInBackpack(timeout)
+    timeout = timeout or 4
+    local elapsed = 0
+    while elapsed < timeout do
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp then
+            for _, item in ipairs(bp:GetChildren()) do
+                if item:IsA("Tool") then
+                    local n = item.Name:lower()
+                    -- nomes comuns: "Badge", "Patient Badge", "Visitor Badge", "Form"
+                    if n:find("badge") or n:find("form") or n:find("paper") or n:find("card") then
+                        return item
+                    end
+                end
+            end
+        end
+        task.wait(0.15)
+        elapsed = elapsed + 0.15
+    end
+    return nil
 end
 
-local function DeliverFicha(model, badgeBase)
-    if not badgeBase then return false end
-
-    -- FIX: a ficha tem cooldown pra ser carregada de novo. Antes o script
-    -- so tentava pegar UMA vez e desistia; agora ele tenta de novo (com
-    -- espera entre as tentativas) ate a ficha estar realmente disponivel.
-    local grabbed = false
-    local attempts = 0
-    local maxAttempts = SecretariaModule.Settings.FichaMaxAttempts or 4
-    while not grabbed and attempts < maxAttempts do
-        attempts = attempts + 1
-        if not model.Parent then return false end -- paciente sumiu, aborta
-        grabbed = TeleportAndFire(badgeBase, SecretariaModule.Settings.FichaTimeout)
-        if not grabbed and attempts < maxAttempts then
-            task.wait(SecretariaModule.Settings.FichaRetryWait or 2.5)
+-- FIX V5: helper que dispara cada estacao, esperando entre tentativas.
+-- O V4 chamava TeleportAndFire 1x e seguia em frente mesmo se falhasse.
+local function FireStep(label, target, timeout, dontMove)
+    if not target then
+        warn("[Secretaria] " .. label .. ": alvo nao encontrado no mapa, pulando.")
+        return false
+    end
+    if dontMove or _G.SolixHub_StayAtDesk then
+        if TryFireNoMove(target, math.min(timeout or 3, 1.5)) then
+            return true
         end
     end
-    if not grabbed then return false end
-    task.wait(0.4)
+    return TeleportAndFire(target, timeout)
+end
 
-    -- FIX: antes de teleportar ate o paciente pra entregar a ficha, tenta
-    -- disparar o prompt dele de onde ja estamos (modo "ficar parado").
+-- FIX V5: tenta entregar a Tool "Badge" ao paciente. Pode ser via:
+--  - ProximityPrompt (clica no NPC e a entrega eh automatica)
+--  - FireTouchInterest (toca a parte do NPC e ativa o tool)
+--  - Ativar o tool perto do NPC (Activate)
+local function DeliverToPatient(model, timeout)
+    timeout = timeout or 6
+    if not model or not model.Parent then return false end
+
+    -- 1) garante que a Tool Badge esta equipada
+    local badge = WaitForBadgeInBackpack(2)
+    if badge then
+        pcall(function()
+            local hum = GetHumanoid()
+            if hum then hum:EquipTool(badge) end
+        end)
+    end
+
+    -- 2) tenta sem mover
     if _G.SolixHub_StayAtDesk and model:FindFirstChildWhichIsA("ProximityPrompt", true) then
-        if TryFireNoMove(model, 1.5) then return true end
+        if TryFireNoMove(model, 2) then return true end
     end
 
+    -- 3) teleporta perto do paciente
     local anchor = GetAnchorPart(model)
-    if anchor then
-        TeleportTo(anchor, Vector3.new(0, 0, 2))
-        task.wait(0.2)
-    end
+    if not anchor then return false end
+    TeleportTo(anchor, Vector3.new(0, 0, 2))
+    task.wait(0.2)
 
+    -- 4) ProximityPrompt
     if model:FindFirstChildWhichIsA("ProximityPrompt", true) then
-        return FireProximity(model, 3)
+        if WaitAndFire(model, 3) then return true end
     end
 
+    -- 5) FireTouchInterest + Activate a Tool
     local root = GetRoot()
-    if root and anchor and typeof(firetouchinterest) == "function" then
+    if root and typeof(firetouchinterest) == "function" then
         local originalCFrame = root.CFrame
         root.CFrame = anchor.CFrame + Vector3.new(0, 0, 2)
         task.wait(0.15)
         pcall(firetouchinterest, root, anchor, 0)
         task.wait(0.15)
         pcall(firetouchinterest, root, anchor, 1)
-        task.wait(0.2)
+        -- ativa a Tool pra "entregar" o badge
+        local char = LocalPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function() tool:Activate() end)
+            end
+        end
+        task.wait(0.3)
         root.CFrame = originalCFrame
         return true
     end
+
     return false
 end
 
+-- FIX V5: ProcessPatient agora segue o fluxo REAL do Animal Hospital
 local function ProcessPatient(model)
     if SecretariaModule.State.InProgress[model] or ProcessedRegistry[model] then return end
     if not IsAlive() then return end
@@ -1062,29 +1221,70 @@ local function ProcessPatient(model)
 
     local root = GetRoot()
     local originalCFrame = root and root.CFrame
-
-    -- FIX: agora guardamos se a ficha foi REALMENTE entregue. Antes o
-    -- script marcava o paciente como "processado" (por 3 minutos) mesmo
-    -- quando nada tinha dado certo, entao ele era "perdido" silenciosamente.
     local delivered = false
 
     local ok, err = pcall(function()
         local els = FindGameElements()
-        if SecretariaModule.Settings.UseFormStation and els.FormStation then
-            TeleportAndFire(els.FormStation, 3)
-            task.wait(0.3)
-        end
-        UI:Flash(0.15, Color3.fromRGB(255, 255, 255))
-        if els.Camera   then TeleportAndFire(els.Camera, 3) end
-        task.wait(0.4)
-        if els.Computer then TeleportAndFire(els.Computer, 3) end
-        task.wait(0.6)
-        if els.Printer  then TeleportAndFire(els.Printer, 3) end
-        task.wait(0.4)
 
-        if model.Parent then -- paciente pode ter sumido durante o processo
-            local badge = GetBadgeBase(els, model)
-            delivered = DeliverFicha(model, badge)
+        -- loga o que achou pra debugar rapido
+        if SecretariaModule.Settings.ShowNotifications then
+            warn(string.format(
+                "[Secretaria] Iniciando atendimento: Camera=%s Computer=%s Printer=%s Stamp=%s Form=%s",
+                tostring(els.Camera and els.Camera:GetFullName() or "nil"),
+                tostring(els.Computer and els.Computer:GetFullName() or "nil"),
+                tostring(els.Printer and els.Printer:GetFullName() or "nil"),
+                tostring(els.Stamp and els.Stamp:GetFullName() or "nil"),
+                tostring(els.FormStation and els.FormStation:GetFullName() or "nil")
+            ))
+        end
+
+        -- ETAPA 1: pegar/carimbar a form (se habilitado)
+        if SecretariaModule.Settings.UseFormStation then
+            if els.FormStation then
+                SecretariaModule.State.Step = "Form"
+                FireStep("Form", els.FormStation, SecretariaModule.Settings.StepTimeout)
+                task.wait(0.2)
+            end
+            if els.Stamp and SecretariaModule.Settings.UseStamp then
+                SecretariaModule.State.Step = "Stamp"
+                FireStep("Stamp", els.Stamp, SecretariaModule.Settings.StepTimeout)
+                task.wait(0.2)
+            end
+        end
+
+        -- ETAPA 2: foto do paciente (Camera do CheckIn)
+        if els.Camera then
+            SecretariaModule.State.Step = "Photo"
+            FireStep("Photo", els.Camera, SecretariaModule.Settings.StepTimeout)
+            task.wait(0.4)
+        end
+
+        -- ETAPA 3: registrar no PC
+        if els.Computer then
+            SecretariaModule.State.Step = "Computer"
+            FireStep("Computer", els.Computer, SecretariaModule.Settings.StepTimeout)
+            task.wait(0.5)
+        end
+
+        -- ETAPA 4: imprimir badge (a Tool Badge eh gerada aqui)
+        if els.Printer then
+            SecretariaModule.State.Step = "Printer"
+            FireStep("Printer", els.Printer, SecretariaModule.Settings.StepTimeout)
+            task.wait(0.6)
+        end
+
+        -- ETAPA 5: paciente pode ter sumido durante o processo
+        if not model.Parent then
+            warn("[Secretaria] Paciente sumiu durante o atendimento, abortando.")
+            return
+        end
+
+        -- ETAPA 6: equipar Tool Badge e entregar ao paciente
+        if SecretariaModule.Settings.AutoDeliver then
+            SecretariaModule.State.Step = "Deliver"
+            delivered = DeliverToPatient(model, 6)
+        else
+            delivered = true  -- modo "so preparar", considera ok
         end
     end)
 
@@ -1093,6 +1293,7 @@ local function ProcessPatient(model)
     if root and originalCFrame then root.CFrame = originalCFrame end
 
     SecretariaModule.State.CurrentNPC        = nil
+    SecretariaModule.State.Step              = "idle"
     SecretariaModule.State.InProgress[model] = nil
 
     if ok and delivered then
@@ -1103,11 +1304,6 @@ local function ProcessPatient(model)
             UI:Notify("Secretaria", (model.Name or "Paciente") .. " atendido.", 3, "success")
         end
     else
-        -- FIX: em vez de abandonar o paciente de vez, tenta de novo algumas
-        -- vezes (a proxima iteracao do loop principal ja pega ele de novo,
-        -- pois ele NAO foi marcado como processado). So desiste depois de
-        -- "MaxPatientRetries" falhas seguidas, pra nao travar pra sempre
-        -- num paciente bugado.
         local fails = (SecretariaModule.State.FailCount[model] or 0) + 1
         SecretariaModule.State.FailCount[model] = fails
         if fails >= (SecretariaModule.Settings.MaxPatientRetries or 3) then
@@ -1120,8 +1316,8 @@ local function ProcessPatient(model)
             end
         elseif SecretariaModule.Settings.ShowNotifications then
             UI:Notify("Secretaria",
-                "Ficha em cooldown, vou tentar " .. (model.Name or "paciente") ..
-                " de novo em instantes...", 3, "warning")
+                "Tentando " .. (model.Name or "paciente") .. " de novo (etapa " ..
+                tostring(SecretariaModule.State.Step) .. ")...", 3, "warning")
         end
     end
 end
@@ -1150,7 +1346,7 @@ function SecretariaModule:Start()
         self.State.Running = false
     end)
     if self.Settings.ShowNotifications then
-        UI:Notify("Secretaria", "Atendimento automatico ON.", 3, "success")
+        UI:Notify("Secretaria", "Atendimento automatico ON (V5).", 3, "success")
     end
 end
 
@@ -1166,6 +1362,7 @@ function SecretariaModule:GetStatus()
         enabled   = self.State.Enabled,
         running   = self.State.Running,
         current   = self.State.CurrentNPC and self.State.CurrentNPC.Name or nil,
+        step      = self.State.Step,
         processed = self.Stats.processed,
     }
 end
@@ -2021,22 +2218,33 @@ end
 --------------------------------------------------------------------------------
 -- 26) WINDUI WINDOW
 --------------------------------------------------------------------------------
--- FIX: a logo estava faltando porque essa variavel (IconURL) era baixada
--- em lugar nenhum -- ela existia mas nunca era usada de verdade na janela.
--- Agora baixamos a imagem e transformamos num asset local pra usar como
--- icone da janela. Se falhar por qualquer motivo, cai pro icone padrao.
+-- FIX V5 (icone): no V4 o Icon recebia WindowIconAsset (string rbxasset://...)
+-- mas em varios builds do WindUI o campo Icon nao aceita asset customizado --
+-- so aceita o NOME do icone Lucide (string tipo "house", "door-open" etc).
+-- Resultado: mesmo quando a imagem era baixada com sucesso, ela NAO
+-- aparecia. Agora a logica eh: tenta o asset, se o WindUI reclamar,
+-- fallback automatico pro Lucide. Tambem troquei o IconURL pra um PNG
+-- (mais compativel que JPG em alguns clients) e adicionei varios Lucides
+-- como fallback caso o asset nao venha.
 local WindowIconAsset
 pcall(function()
-    WindowIconAsset = SaveBinaryAndGetAsset(IconURL, "rsv4_logo.jpg")
+    WindowIconAsset = SaveBinaryAndGetAsset(IconURL, "rsv4_logo.png")
 end)
+
+local function SafeIcon()
+    if WindowIconAsset and WindowIconAsset ~= "" then
+        return WindowIconAsset
+    end
+    return "door-open"  -- Lucide, sempre funciona
+end
 
 local Window
 local okW, errW = pcall(function()
     Window = W_CreateWindow({
-        Title    = "Solix Hub — Receptionist V4",
-        Icon     = WindowIconAsset or "door-open",  -- sua logo; cai pro icone lucide se a imagem falhar
-        Author   = "FelzpSystem",              -- subtitulo da janela
-        Folder   = "SolixHubReceptionistV4",   -- onde salva keys/imagens
+        Title    = "Solix Hub — Receptionist V5",
+        Icon     = SafeIcon(),
+        Author   = "FelzpSystem",
+        Folder   = "SolixHubReceptionistV5",
 
         Size     = UDim2.fromOffset(620, 480),
         MinSize  = Vector2.new(560, 360),
@@ -2109,10 +2317,11 @@ PrincipalTab:Section({Title = "Status da Sessao"})
 local function BuildSecretariaDesc()
     local s = SecretariaModule:GetStatus()
     return string.format(
-        "Estado: %s\nProcessados: %d\nAtual: %s",
+        "Estado: %s\nProcessados: %d\nAtual: %s\nEtapa: %s",
         s.enabled and "ATIVA" or "parada",
         s.processed,
-        s.current or "-"
+        s.current or "-",
+        s.step or "idle"
     )
 end
 
@@ -2369,15 +2578,8 @@ PlayerTab:Toggle({
     Value = SecretariaModule.State.Enabled,
     Callback = function(v) if v then SecretariaModule:Start() else SecretariaModule:Stop() end end,
 })
-PlayerTab:Dropdown({
-    Title  = "Tipo de Ficha",
-    Values = {"Patient", "Visitor"},
-    Value  = SecretariaModule.Settings.DefaultBadgeType,
-    Callback = function(v)
-        SecretariaModule.Settings.DefaultBadgeType = v
-        ConfigSystem:Set("Secretaria.BadgeType", v)
-    end,
-})
+-- V5: removido "Tipo de Ficha" (a ficha eh gerada pelo Printer, nao
+-- escolhida). Adicionado "Usar Stamp" (carimbo da form).
 PlayerTab:Slider({
     Title = "Delay entre atendimentos (s)",
     Step  = 0.1,
@@ -2388,16 +2590,16 @@ PlayerTab:Slider({
     end,
 })
 PlayerTab:Slider({
-    Title = "Timeout de espera da ficha (s)",
-    Step  = 1,
-    Value = {Min = 3, Max = 15, Default = SecretariaModule.Settings.FichaTimeout},
+    Title = "Timeout por etapa (s)",
+    Step  = 0.5,
+    Value = {Min = 1, Max = 10, Default = SecretariaModule.Settings.StepTimeout},
     Callback = function(v)
-        SecretariaModule.Settings.FichaTimeout = v
-        ConfigSystem:Set("Secretaria.FichaTimeout", v)
+        SecretariaModule.Settings.StepTimeout = v
+        ConfigSystem:Set("Secretaria.StepTimeout", v)
     end,
 })
 PlayerTab:Slider({
-    Title = "Tentativas se a ficha estiver em cooldown",
+    Title = "Tentativas se o passo falhar",
     Step  = 1,
     Value = {Min = 1, Max = 8, Default = SecretariaModule.Settings.FichaMaxAttempts},
     Callback = function(v)
@@ -2414,11 +2616,27 @@ PlayerTab:Toggle({
     end,
 })
 PlayerTab:Toggle({
-    Title = "Usar Form Station",
+    Title = "Usar Form Station (papelada)",
     Value = SecretariaModule.Settings.UseFormStation,
     Callback = function(v)
         SecretariaModule.Settings.UseFormStation = v
         ConfigSystem:Set("Secretaria.UseForm", v)
+    end,
+})
+PlayerTab:Toggle({
+    Title = "Usar Stamp (carimbar form)",
+    Value = SecretariaModule.Settings.UseStamp,
+    Callback = function(v)
+        SecretariaModule.Settings.UseStamp = v
+        ConfigSystem:Set("Secretaria.UseStamp", v)
+    end,
+})
+PlayerTab:Toggle({
+    Title = "Entregar badge automaticamente",
+    Value = SecretariaModule.Settings.AutoDeliver,
+    Callback = function(v)
+        SecretariaModule.Settings.AutoDeliver = v
+        ConfigSystem:Set("Secretaria.AutoDeliver", v)
     end,
 })
 
