@@ -177,7 +177,11 @@ local NATIVE_SOUND_IDS = {
 }
 
 local AudioURL = "https://litter.catbox.moe/qtcweo.mp3"
-local IconURL  = "https://litter.catbox.moe/9iq80i.png"
+-- FIX: essa era a logo que voce pediu e que estava faltando. O link que voce
+-- mandou (catbox 9envii.jpg) e uma IMAGEM, entao usei ele aqui como logo.
+-- Nao da pra usar ele como audio porque .jpg nao e som -- se voce tiver um
+-- link de audio (mp3/ogg) de verdade, so trocar o AudioURL acima.
+local IconURL  = "https://files.catbox.moe/9envii.jpg"
 
 local function DownloadBinary(url)
     if not url or url == "" then return nil end
@@ -207,23 +211,59 @@ local function SaveBinaryAndGetAsset(url, filename)
     return asset
 end
 
+-- FIX: o audio nao tocava porque, se o SoundId customizado falhasse (link
+-- fora do ar, sem permissao de escrever arquivo, etc.), o script so tentava
+-- UM id nativo de fallback e nunca checava se o som realmente carregou --
+-- entao, em muitos casos, nada tocava e nenhum erro aparecia. Agora ele
+-- espera o evento "Loaded" do som (com timeout) e, se falhar, tenta o
+-- proximo id nativo da lista, ate um deles funcionar.
 local function PlayMenuAudio(volume)
     volume = volume or 0.5
-    local function playId(id)
+
+    local function tryPlay(id, onFail)
         pcall(function()
             local s = Instance.new("Sound")
-            s.SoundId  = id
-            s.Volume   = volume
-            s.Parent   = PlayerGui
-            s:Play()
+            s.SoundId = id
+            s.Volume  = volume
+            s.Parent  = PlayerGui
+
+            local loaded = false
+            local loadedConn
+            loadedConn = s.Loaded:Connect(function() loaded = true end)
+
+            local playedOk = pcall(function() s:Play() end)
+
             s.Ended:Connect(function() pcall(function() s:Destroy() end) end)
-            Debris:AddItem(s, 8)
+            Debris:AddItem(s, 15)
+
+            task.delay(2.5, function()
+                if loadedConn then pcall(function() loadedConn:Disconnect() end) end
+                if (not playedOk or not loaded) and onFail then
+                    pcall(function() s:Destroy() end)
+                    onFail()
+                end
+            end)
         end)
     end
+
+    local function playNativeChain(i)
+        i = i or 1
+        local id = NATIVE_SOUND_IDS[i]
+        if not id then
+            warn("[SolixHub] Nenhum som de abertura conseguiu tocar (custom e todos os nativos falharam).")
+            return
+        end
+        tryPlay(id, function() playNativeChain(i + 1) end)
+    end
+
     task.spawn(function()
-        local asset = SaveBinaryAndGetAsset(AudioURL, "rsv4_menu.mp3")
-        if asset and asset ~= "" then playId(asset) return end
-        playId(NATIVE_SOUND_IDS[1])
+        local asset
+        pcall(function() asset = SaveBinaryAndGetAsset(AudioURL, "rsv4_menu.mp3") end)
+        if asset and asset ~= "" then
+            tryPlay(asset, function() playNativeChain(1) end)
+        else
+            playNativeChain(1)
+        end
     end)
 end
 
@@ -359,6 +399,23 @@ end
 local function GetAnchorPart(target)
     if not target then return nil end
     if target:IsA("BasePart") then return target end
+
+    -- FIX: para personagens/NPCs (tem Humanoid), SEMPRE usa o HumanoidRootPart.
+    -- Antes, quando o NPC nao tinha PrimaryPart, o script pegava a PRIMEIRA
+    -- BasePart encontrada (podia ser um acessorio, cabelo, mao etc.), o que
+    -- fazia o personagem teleportar pra posicoes erradas/aleatorias no mapa
+    -- em vez de ir ate o paciente de verdade. Isso era a causa principal do
+    -- "pular em lugares aleatorios" a partir do 2o paciente.
+    if target:IsA("Model") or target:IsA("Folder") then
+        local hum = target:FindFirstChildOfClass("Humanoid")
+        if hum then
+            local hrp = target:FindFirstChild("HumanoidRootPart")
+                or target:FindFirstChild("UpperTorso")
+                or target:FindFirstChild("Torso")
+            if hrp and hrp:IsA("BasePart") then return hrp end
+        end
+    end
+
     local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
     if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then return prompt.Parent end
     if target:IsA("Model") then
@@ -390,31 +447,39 @@ local function WaitAndFire(container, timeout)
         elapsed = elapsed + 0.2
     until elapsed >= timeout
 
-    if prompt then
-        local fired = false
-        if typeof(fireproximityprompt) == "function" then
-            fired = pcall(fireproximityprompt, prompt, prompt.HoldDuration or 0) and true or false
-        end
-        if not fired and prompt.Parent and prompt.Parent:IsA("BasePart") and typeof(firetouchinterest) == "function" then
-            local root = GetRoot()
-            if root then
-                local originalCFrame = root.CFrame
-                root.CFrame = prompt.Parent.CFrame + Vector3.new(0, 0, 1)
-                task.wait(0.1)
-                pcall(firetouchinterest, root, prompt.Parent, 0)
-                task.wait(0.1)
-                pcall(firetouchinterest, root, prompt.Parent, 1)
-                task.wait(0.1)
-                root.CFrame = originalCFrame
-                fired = true
-            end
-        end
-        if fired and prompt.HoldDuration and prompt.HoldDuration > 0 then
-            task.wait(prompt.HoldDuration + 0.1)
-        end
-        return fired
+    -- FIX (bug do cooldown da ficha): antes, se o prompt existisse mas
+    -- NUNCA ficasse "Enabled" dentro do timeout (ou seja, ainda em cooldown),
+    -- o codigo disparava ele mesmo assim. O fireproximityprompt do executor
+    -- "funciona" localmente (pcall retorna true) mas o servidor rejeita o
+    -- pedido por causa do cooldown -> o script achava que tinha pego a ficha
+    -- e seguia em frente sem ela de verdade. Agora so dispara se realmente
+    -- estiver Enabled no momento do disparo.
+    if not prompt or not prompt.Enabled then
+        return false
     end
-    return false
+
+    local fired = false
+    if typeof(fireproximityprompt) == "function" then
+        fired = pcall(fireproximityprompt, prompt, prompt.HoldDuration or 0) and true or false
+    end
+    if not fired and prompt.Parent and prompt.Parent:IsA("BasePart") and typeof(firetouchinterest) == "function" then
+        local root = GetRoot()
+        if root then
+            local originalCFrame = root.CFrame
+            root.CFrame = prompt.Parent.CFrame + Vector3.new(0, 0, 1)
+            task.wait(0.1)
+            pcall(firetouchinterest, root, prompt.Parent, 0)
+            task.wait(0.1)
+            pcall(firetouchinterest, root, prompt.Parent, 1)
+            task.wait(0.1)
+            root.CFrame = originalCFrame
+            fired = true
+        end
+    end
+    if fired and prompt.HoldDuration and prompt.HoldDuration > 0 then
+        task.wait(prompt.HoldDuration + 0.1)
+    end
+    return fired
 end
 
 local function TeleportAndFire(target, timeout, offset)
@@ -488,7 +553,9 @@ local ANOMALIA_KEYWORDS = {
 
 local HighlightSystem = {
     Active = {},
-    Enabled = true,
+    -- FIX: agora vem DESATIVADO por padrao (pedido do usuario), e lembra a
+    -- ultima escolha salva no config.
+    Enabled = ConfigSystem:Get("Highlight.Enabled", false),
     OnlyAnomalies = false,
     _scanning = false,
     _thread = nil,
@@ -548,6 +615,7 @@ end
 
 function HighlightSystem:SetEnabled(state)
     self.Enabled = state and true or false
+    ConfigSystem:Set("Highlight.Enabled", self.Enabled)
     if not self.Enabled then self:ClearAll() end
 end
 
@@ -777,11 +845,18 @@ local function MarkProcessed(model)
 end
 
 local SecretariaModule = {
-    State = { Enabled = false, Running = false, CurrentNPC = nil, InProgress = {} },
+    State = { Enabled = false, Running = false, CurrentNPC = nil, InProgress = {}, FailCount = {} },
     Settings = {
         LoopDelay         = ConfigSystem:Get("Secretaria.LoopDelay", 1.5),
         ShowNotifications = ConfigSystem:Get("Secretaria.Notif", true),
-        FichaTimeout      = 8,
+        FichaTimeout      = ConfigSystem:Get("Secretaria.FichaTimeout", 6),
+        -- FIX: numero de vezes que tenta pegar a ficha se ela estiver em
+        -- cooldown, e quanto espera entre uma tentativa e outra.
+        FichaMaxAttempts  = ConfigSystem:Get("Secretaria.FichaMaxAttempts", 4),
+        FichaRetryWait    = ConfigSystem:Get("Secretaria.FichaRetryWait", 2.5),
+        -- FIX: quantas vezes tenta atender o MESMO paciente antes de desistir
+        -- dele (evita ficar preso pra sempre num paciente bugado)
+        MaxPatientRetries = ConfigSystem:Get("Secretaria.MaxPatientRetries", 3),
         UseFormStation    = ConfigSystem:Get("Secretaria.UseForm", true),
         DefaultBadgeType  = ConfigSystem:Get("Secretaria.BadgeType", "Patient"),
         AutoCarry         = ConfigSystem:Get("Secretaria.AutoCarry", false),
@@ -823,7 +898,21 @@ end
 
 local function DeliverFicha(model, badgeBase)
     if not badgeBase then return false end
-    local grabbed = TeleportAndFire(badgeBase, SecretariaModule.Settings.FichaTimeout)
+
+    -- FIX: a ficha tem cooldown pra ser carregada de novo. Antes o script
+    -- so tentava pegar UMA vez e desistia; agora ele tenta de novo (com
+    -- espera entre as tentativas) ate a ficha estar realmente disponivel.
+    local grabbed = false
+    local attempts = 0
+    local maxAttempts = SecretariaModule.Settings.FichaMaxAttempts or 4
+    while not grabbed and attempts < maxAttempts do
+        attempts = attempts + 1
+        if not model.Parent then return false end -- paciente sumiu, aborta
+        grabbed = TeleportAndFire(badgeBase, SecretariaModule.Settings.FichaTimeout)
+        if not grabbed and attempts < maxAttempts then
+            task.wait(SecretariaModule.Settings.FichaRetryWait or 2.5)
+        end
+    end
     if not grabbed then return false end
     task.wait(0.4)
 
@@ -855,11 +944,18 @@ end
 local function ProcessPatient(model)
     if SecretariaModule.State.InProgress[model] or ProcessedRegistry[model] then return end
     if not IsAlive() then return end
+    if not model or not model.Parent then return end
+
     SecretariaModule.State.InProgress[model] = true
     SecretariaModule.State.CurrentNPC       = model
 
     local root = GetRoot()
     local originalCFrame = root and root.CFrame
+
+    -- FIX: agora guardamos se a ficha foi REALMENTE entregue. Antes o
+    -- script marcava o paciente como "processado" (por 3 minutos) mesmo
+    -- quando nada tinha dado certo, entao ele era "perdido" silenciosamente.
+    local delivered = false
 
     local ok, err = pcall(function()
         local els = FindGameElements()
@@ -874,20 +970,48 @@ local function ProcessPatient(model)
         task.wait(0.6)
         if els.Printer  then TeleportAndFire(els.Printer, 3) end
         task.wait(0.4)
-        local badge = GetBadgeBase(els, model)
-        DeliverFicha(model, badge)
+
+        if model.Parent then -- paciente pode ter sumido durante o processo
+            local badge = GetBadgeBase(els, model)
+            delivered = DeliverFicha(model, badge)
+        end
     end)
 
     if not ok then warn("[Secretaria] Erro: " .. tostring(err)) end
 
     if root and originalCFrame then root.CFrame = originalCFrame end
-    MarkProcessed(model)
-    SecretariaModule.Stats.processed = SecretariaModule.Stats.processed + 1
-    SecretariaModule.State.CurrentNPC    = nil
+
+    SecretariaModule.State.CurrentNPC        = nil
     SecretariaModule.State.InProgress[model] = nil
 
-    if ok and SecretariaModule.Settings.ShowNotifications then
-        UI:Notify("Secretaria", (model.Name or "Paciente") .. " atendido.", 3, "success")
+    if ok and delivered then
+        SecretariaModule.State.FailCount[model] = nil
+        MarkProcessed(model)
+        SecretariaModule.Stats.processed = SecretariaModule.Stats.processed + 1
+        if SecretariaModule.Settings.ShowNotifications then
+            UI:Notify("Secretaria", (model.Name or "Paciente") .. " atendido.", 3, "success")
+        end
+    else
+        -- FIX: em vez de abandonar o paciente de vez, tenta de novo algumas
+        -- vezes (a proxima iteracao do loop principal ja pega ele de novo,
+        -- pois ele NAO foi marcado como processado). So desiste depois de
+        -- "MaxPatientRetries" falhas seguidas, pra nao travar pra sempre
+        -- num paciente bugado.
+        local fails = (SecretariaModule.State.FailCount[model] or 0) + 1
+        SecretariaModule.State.FailCount[model] = fails
+        if fails >= (SecretariaModule.Settings.MaxPatientRetries or 3) then
+            MarkProcessed(model)
+            SecretariaModule.State.FailCount[model] = nil
+            if SecretariaModule.Settings.ShowNotifications then
+                UI:Notify("Secretaria",
+                    "Nao consegui atender " .. (model.Name or "paciente") ..
+                    " apos " .. fails .. " tentativas. Pulando.", 4, "error")
+            end
+        elseif SecretariaModule.Settings.ShowNotifications then
+            UI:Notify("Secretaria",
+                "Ficha em cooldown, vou tentar " .. (model.Name or "paciente") ..
+                " de novo em instantes...", 3, "warning")
+        end
     end
 end
 
@@ -1786,11 +1910,20 @@ end
 --------------------------------------------------------------------------------
 -- 26) WINDUI WINDOW
 --------------------------------------------------------------------------------
+-- FIX: a logo estava faltando porque essa variavel (IconURL) era baixada
+-- em lugar nenhum -- ela existia mas nunca era usada de verdade na janela.
+-- Agora baixamos a imagem e transformamos num asset local pra usar como
+-- icone da janela. Se falhar por qualquer motivo, cai pro icone padrao.
+local WindowIconAsset
+pcall(function()
+    WindowIconAsset = SaveBinaryAndGetAsset(IconURL, "rsv4_logo.jpg")
+end)
+
 local Window
 local okW, errW = pcall(function()
     Window = W_CreateWindow({
         Title    = "Solix Hub — Receptionist V4",
-        Icon     = "door-open",                -- icone lucide nativo (nao depende de rede, mais confiavel em mobile)
+        Icon     = WindowIconAsset or "door-open",  -- sua logo; cai pro icone lucide se a imagem falhar
         Author   = "FelzpSystem",              -- subtitulo da janela
         Folder   = "SolixHubReceptionistV4",   -- onde salva keys/imagens
 
@@ -2130,6 +2263,24 @@ PlayerTab:Slider({
     Callback = function(v)
         SecretariaModule.Settings.LoopDelay = v
         ConfigSystem:Set("Secretaria.LoopDelay", v)
+    end,
+})
+PlayerTab:Slider({
+    Title = "Timeout de espera da ficha (s)",
+    Step  = 1,
+    Value = {Min = 3, Max = 15, Default = SecretariaModule.Settings.FichaTimeout},
+    Callback = function(v)
+        SecretariaModule.Settings.FichaTimeout = v
+        ConfigSystem:Set("Secretaria.FichaTimeout", v)
+    end,
+})
+PlayerTab:Slider({
+    Title = "Tentativas se a ficha estiver em cooldown",
+    Step  = 1,
+    Value = {Min = 1, Max = 8, Default = SecretariaModule.Settings.FichaMaxAttempts},
+    Callback = function(v)
+        SecretariaModule.Settings.FichaMaxAttempts = v
+        ConfigSystem:Set("Secretaria.FichaMaxAttempts", v)
     end,
 })
 PlayerTab:Toggle({
