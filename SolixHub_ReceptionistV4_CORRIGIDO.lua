@@ -200,14 +200,38 @@ local function DownloadBinary(url)
     return nil
 end
 
+-- FIX: antes essa funcao falhava calada quando o executor nao suporta
+-- writefile/getcustomasset (comum em executores mobile, ex: Delta). Agora
+-- ela avisa UMA vez (via warn no console) qual foi o motivo exato da falha,
+-- pra dar pra saber se e o executor que nao suporta, o link que caiu, ou
+-- falta de permissao de escrita -- em vez de simplesmente "nao carregou".
+local _warnedNoFileSupport = false
+
 local function SaveBinaryAndGetAsset(url, filename)
-    if typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then return nil end
+    if typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then
+        if not _warnedNoFileSupport then
+            _warnedNoFileSupport = true
+            warn("[SolixHub] Seu executor NAO suporta writefile/getcustomasset. " ..
+                 "Por isso audio e icone customizados (catbox) nunca vao carregar " ..
+                 "nesse executor -- so o som/icone nativo de fallback vai funcionar.")
+        end
+        return nil
+    end
     local data = DownloadBinary(url)
-    if not data or #data < 50 then return nil end
-    local ok = pcall(writefile, filename, data)
-    if not ok then return nil end
+    if not data or #data < 50 then
+        warn("[SolixHub] Falha ao baixar '" .. tostring(url) .. "' (link fora do ar, bloqueado, ou sem funcao de request disponivel).")
+        return nil
+    end
+    local ok, err = pcall(writefile, filename, data)
+    if not ok then
+        warn("[SolixHub] Baixou o arquivo mas nao conseguiu salvar (" .. tostring(err) .. "). Sem permissao de escrita?")
+        return nil
+    end
     local ok2, asset = pcall(getcustomasset, filename)
-    if not ok2 or type(asset) ~= "string" then return nil end
+    if not ok2 or type(asset) ~= "string" then
+        warn("[SolixHub] Salvou o arquivo mas getcustomasset falhou (" .. tostring(asset) .. ").")
+        return nil
+    end
     return asset
 end
 
@@ -217,15 +241,24 @@ end
 -- entao, em muitos casos, nada tocava e nenhum erro aparecia. Agora ele
 -- espera o evento "Loaded" do som (com timeout) e, se falhar, tenta o
 -- proximo id nativo da lista, ate um deles funcionar.
+-- FIX: som agora e parentado no SoundService (fallback Workspace) em vez de
+-- PlayerGui -- em alguns clients mobile, Sound dentro de PlayerGui e menos
+-- confiavel pra tocar. Tambem aumentamos o timeout de "Loaded" pra 5s (2.5s
+-- as vezes era curto demais numa conexao lenta) e sempre avisamos no console
+-- se absolutamente nada conseguiu tocar, com o motivo.
+local SoundService = game:GetService("SoundService")
+
 local function PlayMenuAudio(volume)
     volume = volume or 0.5
 
     local function tryPlay(id, onFail)
+        local played = false
         pcall(function()
             local s = Instance.new("Sound")
             s.SoundId = id
             s.Volume  = volume
-            s.Parent  = PlayerGui
+            s.Looped  = false
+            s.Parent  = SoundService or Workspace
 
             local loaded = false
             local loadedConn
@@ -234,23 +267,28 @@ local function PlayMenuAudio(volume)
             local playedOk = pcall(function() s:Play() end)
 
             s.Ended:Connect(function() pcall(function() s:Destroy() end) end)
-            Debris:AddItem(s, 15)
+            Debris:AddItem(s, 20)
 
-            task.delay(2.5, function()
+            task.delay(5, function()
                 if loadedConn then pcall(function() loadedConn:Disconnect() end) end
-                if (not playedOk or not loaded) and onFail then
+                if not playedOk or not loaded then
                     pcall(function() s:Destroy() end)
-                    onFail()
+                    if onFail then onFail() end
+                else
+                    played = true
                 end
             end)
         end)
+        return played
     end
 
     local function playNativeChain(i)
         i = i or 1
         local id = NATIVE_SOUND_IDS[i]
         if not id then
-            warn("[SolixHub] Nenhum som de abertura conseguiu tocar (custom e todos os nativos falharam).")
+            warn("[SolixHub] Nenhum som de abertura conseguiu tocar (custom e todos os " ..
+                 (i - 1) .. " ids nativos falharam). Pode ser o volume do jogo/dispositivo, " ..
+                 "ou o executor bloqueando o objeto Sound.")
             return
         end
         tryPlay(id, function() playNativeChain(i + 1) end)
@@ -482,8 +520,67 @@ local function WaitAndFire(container, timeout)
     return fired
 end
 
+-- FIX (pedido do usuario): antes de sair teleportando o personagem pra cima
+-- de cada estacao (camera, computador, impressora, ficha...), tenta disparar
+-- o ProximityPrompt DE ONDE O PERSONAGEM JA ESTA, aumentando temporariamente
+-- a distancia/linha-de-visao exigidas. Muitos jogos so validam no cliente,
+-- entao isso funciona sem precisar mover o personagem -- ele fica parado na
+-- recepcao o tempo todo. Se isso falhar (jogo valida distancia no servidor),
+-- ai sim cai no metodo antigo de teleportar ate o objeto.
+local STAY_STILL_MAX_DISTANCE = 60
+
+local function TryFireNoMove(target, timeout)
+    if not target then return false end
+    timeout = timeout or 3
+    local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if not prompt then return false end
+
+    local okBoost, origDist, origLOS = pcall(function()
+        return prompt.MaxActivationDistance, prompt.RequiresLineOfSight
+    end)
+    if okBoost then
+        pcall(function()
+            prompt.MaxActivationDistance = STAY_STILL_MAX_DISTANCE
+            prompt.RequiresLineOfSight    = false
+        end)
+    end
+
+    local elapsed = 0
+    while (not prompt.Enabled) and elapsed < timeout do
+        task.wait(0.15)
+        elapsed = elapsed + 0.15
+    end
+
+    local fired = false
+    if prompt.Enabled and typeof(fireproximityprompt) == "function" then
+        fired = pcall(fireproximityprompt, prompt, prompt.HoldDuration or 0) and true or false
+        if fired and prompt.HoldDuration and prompt.HoldDuration > 0 then
+            task.wait(prompt.HoldDuration + 0.1)
+        end
+    end
+
+    -- restaura os valores originais do prompt pra nao bugar o jogo pra outros jogadores
+    if okBoost then
+        pcall(function()
+            prompt.MaxActivationDistance = origDist
+            prompt.RequiresLineOfSight    = origLOS
+        end)
+    end
+
+    return fired
+end
+
 local function TeleportAndFire(target, timeout, offset)
     if not target then return false end
+
+    -- 1) tenta parado, sem teleportar (modo "ficar na recepcao")
+    if _G.SolixHub_StayAtDesk then
+        if TryFireNoMove(target, math.min(timeout or 3, 1.5)) then
+            return true
+        end
+    end
+
+    -- 2) fallback: teleporta ate o objeto (metodo antigo, mais confiavel)
     local anchor = GetAnchorPart(target)
     if anchor then
         TeleportTo(anchor, offset)
@@ -860,9 +957,17 @@ local SecretariaModule = {
         UseFormStation    = ConfigSystem:Get("Secretaria.UseForm", true),
         DefaultBadgeType  = ConfigSystem:Get("Secretaria.BadgeType", "Patient"),
         AutoCarry         = ConfigSystem:Get("Secretaria.AutoCarry", false),
+        -- FIX: modo "ficar parado na recepcao" pedido pelo usuario. Quando
+        -- ligado, o script tenta disparar os prompts sem mover o personagem;
+        -- so teleporta se isso falhar de verdade.
+        StayAtDesk        = ConfigSystem:Get("Secretaria.StayAtDesk", true),
     },
     Stats = { processed = 0 },
 }
+
+-- espelha a config pra uma global, pois TeleportAndFire (definida antes desse
+-- modulo no arquivo) precisa ler esse valor e nao enxerga a local SecretariaModule
+_G.SolixHub_StayAtDesk = SecretariaModule.Settings.StayAtDesk
 
 local function IsAnomaliaName(name)
     local lower = (name or ""):lower()
@@ -915,6 +1020,12 @@ local function DeliverFicha(model, badgeBase)
     end
     if not grabbed then return false end
     task.wait(0.4)
+
+    -- FIX: antes de teleportar ate o paciente pra entregar a ficha, tenta
+    -- disparar o prompt dele de onde ja estamos (modo "ficar parado").
+    if _G.SolixHub_StayAtDesk and model:FindFirstChildWhichIsA("ProximityPrompt", true) then
+        if TryFireNoMove(model, 1.5) then return true end
+    end
 
     local anchor = GetAnchorPart(model)
     if anchor then
@@ -1959,6 +2070,17 @@ if not okW or not Window then
     return
 end
 
+-- FIX: avisa na propria UI (nao so no console, que no mobile geralmente
+-- ninguem ve) quando a logo customizada nao carregou, pra ficar claro que
+-- nao e um bug aleatorio -- e o executor/link que nao deixou.
+if not WindowIconAsset then
+    task.delay(1, function()
+        UI:Notify("Aviso",
+            "Logo customizada nao carregou (seu executor pode nao suportar " ..
+            "arquivos, ou o link caiu). Usando icone padrao.", 5, "warning")
+    end)
+end
+
 task.spawn(function() PlayMenuAudio(0.4) end)
 task.spawn(function() HighlightSystem:StartLiveScan() end)
 InfoModule:Start()
@@ -2543,6 +2665,28 @@ MiscTab:Button({
 -- ABA: SETTINGS
 -- =========================
 local SettingsTab = Window:Tab({Title = "Settings", Icon = "settings"})
+
+SettingsTab:Section({Title = "Secretaria - Movimento"})
+SettingsTab:Toggle({
+    Title = "Ficar parado na recepcao (nao teleportar)",
+    Value = SecretariaModule.Settings.StayAtDesk,
+    Callback = function(v)
+        SecretariaModule.Settings.StayAtDesk = v
+        _G.SolixHub_StayAtDesk = v
+        ConfigSystem:Set("Secretaria.StayAtDesk", v)
+        UI:Notify("Secretaria",
+            v and "Vai tentar disparar tudo parado, sem teleportar."
+              or "Voltou ao modo antigo (teleporta ate cada estacao).",
+            3, "success")
+    end,
+})
+SettingsTab:Paragraph({
+    Title = "Sobre",
+    Desc  = "Quando ligado, tenta pegar ficha/camera/computador/impressora\n"
+         .. "sem mover o personagem, so aumentando a distancia do prompt.\n"
+         .. "Se o jogo nao aceitar (ficar travado sem completar), desligue\n"
+         .. "aqui que ele volta a teleportar ate cada estacao como antes.",
+})
 
 SettingsTab:Section({Title = "Config Save/Load"})
 SettingsTab:Input({
